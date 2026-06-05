@@ -97,6 +97,22 @@ local function edlencode(url)
     return "%" .. string.len(url) .. "%" .. url
 end
 
+local function normalize_torrent_url(url)
+    if url == nil then
+        return nil
+    end
+
+    -- Clipboard/command-based loadfile on Windows can turn magnet URIs into a
+    -- pseudo local path like "D:\path\magnet:?xt=...". Extract the real URI so
+    -- the hook still recognizes it.
+    local magnet_pos = url:find("magnet:%?")
+    if magnet_pos ~= nil then
+        return url:sub(magnet_pos)
+    end
+
+    return url
+end
+
 local function guess_type_by_extension(ext)
     if ext == "mkv" or ext == "mp4" or ext == "avi" or ext == "wmv" or ext == "vob" or ext == "m2ts" or ext == "ogm" then
         return "video"
@@ -198,7 +214,7 @@ local function generate_m3u(magnet_uri, files)
 end
 
 mp.add_hook("on_load", 5, function()
-    local url = mp.get_property("stream-open-filename")
+    local url = normalize_torrent_url(mp.get_property("stream-open-filename"))
     if url:find("^magnet:") == 1 or (url:find("^https?://") == 1 and url:find("%.torrent$") ~= nil) then
         mp.set_property_bool("file-local-options/ytdl", false)
         if opts.torrserver_init then init() end
