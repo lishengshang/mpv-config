@@ -218,7 +218,7 @@ local function process_iqiyi_with_tvid(tvid, url, callback)
     get_video_info(tvid, function(videoInfo)
         if not videoInfo then
             show_message('获取爱奇艺视频信息失败', 3)
-            if callback then callback(false) end
+            callback(false)
             return
         end
 
