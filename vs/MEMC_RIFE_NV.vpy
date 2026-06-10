@@ -13,7 +13,7 @@ clip = video_in
 ############
 
 H_Pre = 1440
-Model = 46
+Model = 426
 Fps_Num = 2
 Fps_Den = 1
 Sc_Mode = 1
