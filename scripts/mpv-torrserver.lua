@@ -15,12 +15,18 @@ local luacurl_available, cURL = pcall(require, 'cURL')
 local is_windows = package.config:sub(1, 1) == "\\" -- detect path separator, windows uses backslashes
 
 local function find_executable(name)
+    -- If name is already a valid file path, use it directly
+    local meta = utils.file_info(name)
+    if meta and meta.is_file then
+        return name
+    end
     local os_path = os.getenv("PATH") or ""
+    local sep = is_windows and ";" or ":"
     local fallback_path = utils.join_path("/usr/bin", name)
     local exec_path
-    for path in os_path:gmatch("[^:]+") do
+    for path in os_path:gmatch("[^" .. sep .. "]+") do
         exec_path = utils.join_path(path, name)
-        local meta, meta_error = utils.file_info(exec_path)
+        local meta = utils.file_info(exec_path)
         if meta and meta.is_file then
             return exec_path
         end
@@ -29,15 +35,75 @@ local function find_executable(name)
     return name -- fallback to just the name, hoping it's in PATH
 end
 
+local function torrserver_running()
+    local cmd = mp.command_native {
+        name = "subprocess",
+        capture_stdout = true,
+        playback_only = false,
+        args = {"curl", "-s", "--noproxy", "*", "--max-time", "2", "http://127.0.0.1:8090/"}
+    }
+    return cmd.status == 0
+end
+
+-- Keep a reference to the launched process so Lua GC doesn't abort it.
+local _torrserver_proc
+
 local function init()
-    local exec_path = find_executable(opts.torrserver_path)
-    local windows_args = { 'powershell', '-NoProfile', '-Command', exec_path }
-    local unix_args = { '/bin/bash', '-c', exec_path }
-    local args = is_windows and windows_args or unix_args
-    local res = mp.command_native_async({ name = "subprocess", capture_stdout = true, playback_only = false, args = args })
-    if res.status == 0 then
-        mp.msg.error("TorrServer failed to start: ")
+    -- Skip if TorrServer is already up
+    if torrserver_running() then
+        mp.msg.info("TorrServer already running")
+        return true
     end
+
+    local exec_path = find_executable(opts.torrserver_path)
+    mp.msg.info("Starting TorrServer: " .. exec_path)
+
+    if is_windows then
+        -- Use synchronous command: powershell runs Start-Process (which
+        -- launches TorrServer and returns immediately), then powershell exits.
+        -- Synchronous = no GC-abortable async handle, so TorrServer survives.
+        local dir = exec_path:match("^(.*)[/\\][^/\\]+$") or ""
+        local ps_cmd = "Start-Process -FilePath '" .. exec_path
+                       .. "' -WorkingDirectory '" .. dir
+                       .. "' -WindowStyle Hidden"
+        local res = mp.command_native {
+            name = "subprocess",
+            capture_stdout = true,
+            capture_stderr = true,
+            playback_only = false,
+            args = {"powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_cmd}
+        }
+        if res.status ~= 0 then
+            mp.msg.error("Failed to launch TorrServer (powershell exit " .. res.status .. "): " .. (res.stderr or ""))
+            return false
+        end
+    else
+        _torrserver_proc = mp.command_native_async({
+            name = "subprocess",
+            capture_stdout = false,
+            playback_only = false,
+            args = {"/bin/bash", "-c", "nohup '" .. exec_path .. "' >/dev/null 2>&1 &"}
+        })
+    end
+
+    -- Poll until TorrServer is ready. With --noproxy, connection-refused is
+    -- instant, so each failed probe costs only the ~1s ping sleep.
+    local max_attempts = 30
+    for i = 1, max_attempts do
+        if torrserver_running() then
+            mp.msg.info("TorrServer is ready (attempt " .. i .. ")")
+            return true
+        end
+        mp.command_native {
+            name = "subprocess",
+            capture_stdout = true,
+            playback_only = false,
+            args = is_windows and {"ping", "-n", "2", "127.0.0.1"} or {"sleep", "1"}
+        }
+    end
+
+    mp.msg.error("TorrServer failed to start within " .. max_attempts .. " attempts")
+    return false
 end
 
 local char_to_hex = function(c)
@@ -217,7 +283,11 @@ mp.add_hook("on_load", 5, function()
     local url = normalize_torrent_url(mp.get_property("stream-open-filename"))
     if url:find("^magnet:") == 1 or (url:find("^https?://") == 1 and url:find("%.torrent$") ~= nil) then
         mp.set_property_bool("file-local-options/ytdl", false)
-        if opts.torrserver_init then init() end
+        if opts.torrserver_init then
+            if not init() then
+                return
+            end
+        end
         local magnet_info, err = get_magnet_info(url)
         if type(magnet_info) == "table" then
             if magnet_info.file_stats then
