@@ -21,7 +21,7 @@ St_Eng = False
 Res_Opt = [1280, 720]
 Res_Max = [1920, 1200]
 Ws_Size = 0
-H_Max = 1440
+H_Max = 1080
 Lk_Fmt = False
 ## 整数，预降低处理源高度
 ## 指定使用的模型，文件放置位为 .../vs-plugins/models/
