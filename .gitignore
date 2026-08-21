@@ -9,3 +9,5 @@ files/
 playlists/
 
 scripts/webtorrent.js
+
+.zcode/
