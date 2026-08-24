@@ -176,6 +176,9 @@ local force_disabled = false
 local spawn_waiting = false
 local spawn_working = false
 local script_written = false
+local rtx_hdr = false
+local dovi_p5 = false
+local has_video_colorspace = false
 
 local dirty = false
 
@@ -365,6 +368,20 @@ local function vf_string(filters, full)
     return vf
 end
 
+local function command_has_arg(command_name, arg_name)
+    local command_list = mp.get_property_native('command-list', {})
+    for _, command in ipairs(command_list) do
+        if command.name == command_name then
+            for _, arg in ipairs(command.args or {}) do
+                if arg.name == arg_name then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
 local function calc_dimensions()
     local width = properties["video-out-params"] and properties["video-out-params"]["dw"]
     local height = properties["video-out-params"] and properties["video-out-params"]["dh"]
@@ -392,13 +409,13 @@ local info_timer = nil
 
 local function info(w, h)
     local rotate = properties["video-params"] and properties["video-params"]["rotate"]
-    local rtx_hdr = properties["video-params"] and properties["video-params"]["gamma"] == "bt.1886" and properties["video-out-params"] and properties["video-out-params"]["gamma"] ~= "bt.1886"
-    local dovi_p5 = properties["video-params"] and properties["video-params"]["colormatrix"] == "dolbyvision" and properties["video-params"]["colorlevels"] == "full"
     local image = properties["current-tracks/video"] and properties["current-tracks/video"]["image"]
     local albumart = image and properties["current-tracks/video"]["albumart"]
     local cache_state = properties["demuxer-cache-state"]
     local dir = properties["path"] and mp.utils.split_path(properties["path"])
     local file_ext = properties["path"] and properties["path"]:match("%.([^%.]+)$")
+    dovi_p5 = properties["video-params"] and properties["video-params"]["colormatrix"] == "dolbyvision" and properties["video-params"]["colorlevels"] == "full"
+    rtx_hdr = properties["video-params"] and properties["video-params"]["gamma"] == "bt.1886" and properties["video-out-params"] and properties["video-out-params"]["gamma"] ~= "bt.1886"
 
     if is_windows and dir then dir = dir:gsub("\\", "/") end
     if cache_state then cached_ranges = cache_state["seekable-ranges"] end
@@ -408,8 +425,7 @@ local function info(w, h)
         (dir and need_ignore(excluded_dir, dir)) or
         (file_ext and exclude(file_ext:lower(), ext_blacklist)) or
         ((properties["demuxer-via-network"] or is_protocol(properties["path"]) or (properties["cache"] == "auto" and #cached_ranges > 0)) and not options.network) or
-        (rtx_hdr) or
-        (dovi_p5) or
+        (rtx_hdr and not has_video_colorspace) or
         (albumart and not options.audio) or
         (image and not albumart) or
         force_disabled
@@ -626,6 +642,8 @@ local function draw(w, h, script)
     if x ~= nil then
         if pre_0_30_0 then
             mp.command_native({"overlay-add", options.overlay_id, x, y, options.thumbnail..".bgra", 0, "bgra", w, h, (4*w)})
+        elseif has_video_colorspace and not rtx_hdr and not dovi_p5 then
+            mp.command_native_async({"overlay-add", options.overlay_id, x, y, options.thumbnail..".bgra", 0, "bgra", w, h, (4*w), w, h, true}, function() end)
         else
             mp.command_native_async({"overlay-add", options.overlay_id, x, y, options.thumbnail..".bgra", 0, "bgra", w, h, (4*w)}, function() end)
         end
@@ -919,6 +937,9 @@ local function file_load()
     real_w, real_h = nil, nil
     last_real_w, last_real_h = nil, nil
     last_seek_time = nil
+    rtx_hdr = false
+    dovi_p5 = false
+    has_video_colorspace = command_has_arg('overlay-add', 'video_colorspace')
     if info_timer then
         info_timer:kill()
         info_timer = nil
