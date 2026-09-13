@@ -1,5 +1,5 @@
 --[[ uosc | https://github.com/tomasklaen/uosc ]]
-local uosc_version = '5.12.0'
+local uosc_version = '5.13.0'
 
 mp.commandv('script-message', 'uosc-version', uosc_version)
 
@@ -28,6 +28,7 @@ defaults = {
 	timeline_step = '5',
 	timeline_cache = true,
 	timeline_heatmap = 'overlay',
+	timeline_mbtn_right = '',
 
 	controls =
 	'menu,gap,<video,audio>subtitles,<has_many_audio>audio,<has_many_video>video,<has_many_edition>editions,<stream>stream-quality,gap,space,<video,audio>speed,space,shuffle,loop-playlist,loop-file,gap,prev,items,next,gap,fullscreen',
@@ -67,7 +68,6 @@ defaults = {
 
 	scale = 1,
 	scale_fullscreen = 1.3,
-	font = '',
 	font_scale = 1,
 	text_border = 1.2,
 	border_radius = 4,
@@ -103,7 +103,6 @@ defaults = {
 	languages = 'slang,en',
 	subtitles_directory = '~~/subtitles',
 	disable_elements = '',
-	ziggy_path = 'default',
 }
 options = table_copy(defaults)
 function handle_options(changed_options)
@@ -180,7 +179,7 @@ config = {
 	-- sets max rendering frequency in case the
 	-- native rendering frequency could not be detected
 	render_delay = 1 / 60,
-	font = options.font ~= '' and options.font or mp.get_property('options/osd-font'),
+	font = mp.get_property('options/osd-font'),
 	osd_margin_x = mp.get_property('osd-margin-x'),
 	osd_margin_y = mp.get_property('osd-margin-y'),
 	osd_alignment_x = mp.get_property('osd-align-x'),
@@ -349,6 +348,7 @@ function create_default_menu_items()
 				{title = t('Key bindings'), value = 'script-binding uosc/keybinds'},
 				{title = t('Show in directory'), value = 'script-binding uosc/show-in-directory'},
 				{title = t('Open config folder'), value = 'script-binding uosc/open-config-directory'},
+				{title = t('Update uosc'), value = 'script-binding uosc/update'},
 			},
 		},
 		{title = t('Quit'), value = 'quit'},
@@ -385,7 +385,6 @@ state = {
 	ime_active = mp.get_property_native('input-ime'),
 	chapters = {},
 	chapter_ranges = {},
-	current_clipboard_backend = mp.get_property_native('current-clipboard-backend'),
 	border = mp.get_property_native('border'),
 	title_bar = mp.get_property_native('title-bar'),
 	fullscreen = mp.get_property_native('fullscreen'),
@@ -446,9 +445,7 @@ require('lib/menus')
 -- Determine path to ziggy
 do
 	local bin = 'ziggy-' .. (state.platform == 'windows' and 'windows.exe' or state.platform)
-	config.ziggy_path = os.getenv('MPV_UOSC_ZIGGY') or
-	options.ziggy_path == 'default' and join_path(mp.get_script_directory(), join_path('bin', bin)) or
-	utils.join_path(mp.command_native({ 'expand-path', options.ziggy_path }), bin)
+	config.ziggy_path = os.getenv('MPV_UOSC_ZIGGY') or join_path(mp.get_script_directory(), join_path('bin', bin))
 end
 
 --[[ STATE UPDATERS ]]
@@ -874,13 +871,12 @@ bind_command('playlist', create_self_updating_menu_opener({
 	footnote = t('Paste path or url to add.') .. ' ' .. t('%s to reorder.', 'ctrl+up/down/pgup/pgdn/home/end'),
 	serializer = function(playlist)
 		local items = {}
-		local playlist_titles = mp.get_property_native('user-data/playlistmanager/titles') or {}
+		local force_filename = mp.get_property_native('osd-playlist-entry') == 'filename'
 		for index, item in ipairs(playlist) do
-			local is_url = is_protocol(item.filename)
 			local title = type(item.title) == 'string' and #item.title > 0 and item.title or false
 			items[index] = {
-				title = is_url and (title or playlist_titles[item.filename] or url_decode(item.filename)) or
-				serialize_path(item.filename).basename,
+				title = (not force_filename and title) and title
+					or (is_protocol(item.filename) and item.filename or serialize_path(item.filename).basename),
 				hint = tostring(index),
 				active = item.current,
 				value = index,
@@ -1080,6 +1076,9 @@ bind_command('open-config-directory', function()
 	else
 		msg.error('Couldn\'t serialize config path "' .. config_path .. '".')
 	end
+end)
+bind_command('update', function()
+	if not Elements:has('updater') then require('elements/Updater'):new() end
 end)
 
 --[[ MESSAGE HANDLERS ]]

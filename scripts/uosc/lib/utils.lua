@@ -54,15 +54,14 @@ do
 
 	-- alphanum sorting for humans in Lua
 	-- http://notebook.kulchenko.com/algorithms/alphanumeric-natural-sorting-for-humans-in-lua
-	local function padnum(n, d)
-		return #d > 0 and ('%03d%s%.12f'):format(#n, n, tonumber(d) / (10 ^ #d))
-			or ('%03d%s'):format(#n, n)
+	local function padnum(n)
+		return ("%03d%s"):format(#n, n)
 	end
 
 	local function sort_lua(strings)
 		local tuples = {}
 		for i, f in ipairs(strings) do
-			tuples[i] = {f:lower():gsub('0*(%d+)%.?(%d*)', padnum), f}
+			tuples[i] = {f:lower():gsub('0*(%d+)', padnum), f}
 		end
 		table.sort(tuples, function(a, b)
 			return a[1] == b[1] and #b[2] < #a[2] or a[1] < b[1]
@@ -925,79 +924,17 @@ function call_ziggy_async(args, callback)
 	end
 end
 
----@param url string
----@param method string
----@param callback fun(error: string|nil, data: table|nil)
----@return fun() abort Function to abort the request.
-function http_request_async(method, url, headers, body, callback)
-	local args = { 'curl', '-s', '-L',  '-X', method, url }
-
-	if headers then
-		for k, v in pairs(headers) do
-			table.insert(args, '-H')
-			table.insert(args, string.format('%s: %s', k, v))
-		end
-	end
-
-	if body then
-		table.insert(args, '-d')
-		table.insert(args, utils.format_json(body))
-	end
-
-	local abort_signal = mp.command_native_async({
-		name = 'subprocess',
-		capture_stdout = true,
-		capture_stderr = true,
-		playback_only = false,
-		args = args
-	}, function(success, res, error)
-		local error = error ~= '' and error or res and res.stderr ~= '' and res.stderr or nil
-		if not success or not res or res.status ~= 0 then
-			msg.error('HTTP request failed: ' .. (res.stderr or 'unknown error'))
-			callback(error, nil)
-			return
-		end
-
-		local data = utils.parse_json(res.stdout)
-		callback(error, data)
-	end)
-
-	return function()
-		mp.abort_async_command(abort_signal)
-	end
-end
-
 ---@return string|nil
 function get_clipboard()
-	if state.current_clipboard_backend then
-		if state.platform == 'windows' or state.platform == 'darwin' then
-			return mp.get_property('clipboard/text', '')
-		end
-		if state.platform == 'linux' then
-			-- Wayland
-			if os.getenv('WAYLAND_DISPLAY') or os.getenv('WAYLAND_SOCKET') then
-				if state.current_clipboard_backend == "wayland" or mp.get_property_native("focused") then
-					return mp.get_property('clipboard/text', '')
-				end
-				local res = utils.subprocess({
-					args = { 'wl-paste', '-n' },
-					playback_only = false,
-				})
-				if not res.error then
-					return res.stdout
-				end
-			end
-			-- X11
-			local res = utils.subprocess({
-				args = { 'xclip', '-selection', 'clipboard', '-out' },
-				playback_only = false,
-			})
-			if not res.error then
-				return res.stdout
-			end
-		end
+	local data, err = mp.get_property('clipboard/text')
+	if data then
+		return data
 	end
-	-- Fallback to ziggy
+	if err and err ~= 'property not found' and err ~= 'property unavailable' then
+		mp.commandv('show-text', 'Get clipboard error: ' .. err)
+		return nil
+	end
+
 	local err, data = call_ziggy({'get-clipboard'})
 	if err then
 		mp.commandv('show-text', 'Get clipboard error. See console for details.')
@@ -1010,23 +947,17 @@ end
 ---@return string|nil payload String that was copied to clipboard.
 function set_clipboard(payload)
 	payload = tostring(payload)
-	if state.current_clipboard_backend then
-		if state.platform == 'windows' or state.platform == 'darwin' then
-			return mp.commandv('set', 'clipboard/text', payload)
-		end
-		if state.platform == 'linux' then
-			-- Wayland
-			if os.getenv('WAYLAND_DISPLAY') or os.getenv('WAYLAND_SOCKET') then
-				return utils.subprocess({ args = { 'wl-copy' }, stdin_data = payload })
-			end
-			-- X11
-			return utils.subprocess({
-				args = { 'xclip', '-silent', '-selection', 'clipboard', '-in' },
-				stdin_data = payload
-			})
-		end
+
+	local success, err = mp.set_property('clipboard/text', payload)
+	if success then
+		mp.commandv('show-text', t('Copied to clipboard') .. ': ' .. payload, 3000)
+		return payload
 	end
-	-- Fallback to ziggy
+	if err and err ~= 'property not found' and err ~= 'property unavailable' then
+		mp.commandv('show-text', 'Set clipboard error: ' .. err)
+		return nil
+	end
+
 	local err, data = call_ziggy({'set-clipboard', payload})
 	if err then
 		mp.commandv('show-text', 'Set clipboard error. See console for details.')

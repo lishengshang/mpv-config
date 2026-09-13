@@ -37,17 +37,17 @@ function Controls:init_options()
 	-- Serialize control elements
 	local shorthands = {
 		['play-pause'] = 'cycle:pause:pause:no/yes=play_arrow?' .. t('Play/Pause'),
-		menu = 'command:menu_book:script-binding uosc/menu-blurred?' .. t('Menu'),
-		subtitles = 'command:closed_caption:script-binding uosc/subtitles#sub>1?' .. t('Subtitles'),
+		menu = 'command:menu:script-binding uosc/menu-blurred?' .. t('Menu'),
+		subtitles = 'command:subtitles:script-binding uosc/subtitles#sub>0?' .. t('Subtitles'),
 		audio = 'command:graphic_eq:script-binding uosc/audio#audio>1?' .. t('Audio'),
 		['audio-device'] = 'command:speaker:script-binding uosc/audio-device?' .. t('Audio device'),
-		video = 'command:smart_display:script-binding uosc/video#video>1?' .. t('Video'),
-		playlist = 'command:list_alt:script-binding uosc/playlist#playlist>1?' .. t('Playlist'),
-		chapters = 'command:library_books:script-binding uosc/chapters#chapters>1?' .. t('Chapters'),
-		['editions'] = 'command:movie_filter:script-binding uosc/editions#editions>1?' .. t('Editions'),
+		video = 'command:theaters:script-binding uosc/video#video>1?' .. t('Video'),
+		playlist = 'command:list_alt:script-binding uosc/playlist?' .. t('Playlist'),
+		chapters = 'command:bookmark:script-binding uosc/chapters#chapters>0?' .. t('Chapters'),
+		['editions'] = 'command:bookmarks:script-binding uosc/editions#editions>1?' .. t('Editions'),
 		['stream-quality'] = 'command:high_quality:script-binding uosc/stream-quality?' .. t('Stream quality'),
-		['open-file'] = 'command:folder:script-binding uosc/open-file?' .. t('Open file'),
-		['items'] = 'command:list_alt:script-binding uosc/items#playlist>1?' .. t('Playlist/Files'),
+		['open-file'] = 'command:file_open:script-binding uosc/open-file?' .. t('Open file'),
+		['items'] = 'command:list_alt:script-binding uosc/items?' .. t('Playlist/Files'),
 		prev = 'command:arrow_back_ios:script-binding uosc/prev?' .. t('Previous'),
 		next = 'command:arrow_forward_ios:script-binding uosc/next?' .. t('Next'),
 		first = 'command:first_page:script-binding uosc/first?' .. t('First'),
@@ -271,9 +271,6 @@ function Controls:register_badge_updater(badge, element)
 			for _, track in ipairs(value) do if track.type == prop then count = count + 1 end end
 			return count
 		end
-	elseif prop == 'playlist' then
-		observable_name = 'playlist-count'
-		serializer = function(count) return count end
 	else
 		local parts = split(prop, '@')
 		-- Support both new `prop@owner` and old `@prop` syntaxes
@@ -380,15 +377,65 @@ function Controls:update_dimensions()
 	local width_for_dynamics = available_width - statics_width
 	local empty_space_width = width_for_dynamics - max_dynamics_width
 	local width_for_gaps = math.min(empty_space_width, size * gaps)
-	local individual_space_width = spaces > 0 and ((empty_space_width - width_for_gaps) / spaces) or 0
 
+	-- Calculate per-space widths: if exactly 2 spaces, center content between them absolutely
+	local space_widths = {}
+	if spaces == 2 then
+		-- Measure content width in each section: before space1, between spaces, after space2
+		local section = 1
+		local section_widths = {0, 0, 0}
+		for c, control in ipairs(self.layout) do
+			if not control.hide then
+				if control.sizing == 'space' then
+					section = section + 1
+				else
+					local w = 0
+					if control.sizing == 'gap' then
+						if width_for_gaps > 0 then w = width_for_gaps * (control.ratio / gaps) end
+					elseif control.sizing == 'static' then
+						w = size * control.scale * control.ratio + (c ~= #self.layout and spacing or 0)
+					elseif control.sizing == 'dynamic' then
+						local height = size * control.scale
+						w = (max_dynamics_width < width_for_dynamics
+							and height * control.ratio or width_for_dynamics * ((control.scale * control.ratio) / dynamic_units))
+							+ (c ~= #self.layout and spacing or 0)
+					end
+					section_widths[section] = section_widths[section] + w
+				end
+			end
+		end
+		local left_w, middle_w = section_widths[1], section_widths[2]
+		local total_space = empty_space_width - width_for_gaps
+		-- For absolute centering: space1 + left_w + middle_w/2 = available_width/2
+		local space1 = (available_width - middle_w) / 2 - left_w + spacing / 2
+		local space2 = total_space - space1
+		-- Clamp: both spaces must be non-negative. If one side would go negative,
+		-- transfer the deficit to the other side so space1 + space2 == total_space
+		-- is preserved whenever that's still possible (i.e. total_space >= 0).
+		if space1 < 0 then
+			space2 = space2 + space1
+			space1 = 0
+		elseif space2 < 0 then
+			space1 = space1 + space2
+			space2 = 0
+		end
+		if space1 < 0 then space1 = 0 end
+		if space2 < 0 then space2 = 0 end
+		space_widths = {space1, space2}
+	else
+		local individual_space_width = spaces > 0 and ((empty_space_width - width_for_gaps) / spaces) or 0
+		for i = 1, spaces do space_widths[i] = individual_space_width end
+	end
+
+	local space_index = 0
 	for c, control in ipairs(self.layout) do
 		if not control.hide then
 			local sizing, element, scale, ratio = control.sizing, control.element, control.scale, control.ratio
 			local width, height = 0, 0
 
 			if sizing == 'space' then
-				if individual_space_width > 0 then width = individual_space_width end
+				space_index = space_index + 1
+				width = space_widths[space_index] or 0
 			elseif sizing == 'gap' then
 				if width_for_gaps > 0 then width = width_for_gaps * (ratio / gaps) end
 			elseif sizing == 'static' then
