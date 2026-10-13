@@ -14,7 +14,7 @@ clip = video_in
 ############
 
 H_Pre = 720
-Model = "the_database_AnimeJaNaiV2L1_x2_fp16_op17.onnx"
+Model = "the_database_AnimeJaNaiV3L1_sharp_HD_x2_fp16_op17.onnx"
 Fp16_Qnt = True
 Gpu = 0
 Gpu_T = 2
