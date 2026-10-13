@@ -1,5 +1,5 @@
-### 使用自定义的AI放大模型，DX12显卡专用
-### 文档_ https://github.com/hooke007/mpv_PlayKit/discussions/329
+### 动画超分 AnimeJaNai V2，DX12显卡专用
+### 2x放大。V3 之前的版本，保留用于与 TensorRT 后端做 A/B 对比
 ### 参数_ https://github.com/hooke007/mpv_PlayKit/wiki/3_K7sfunc#uai_dml
 
 import vapoursynth as vs
@@ -14,7 +14,7 @@ clip = video_in
 ############
 
 H_Pre = 720
-Model = "the_database_AnimeJaNaiV3L1_sharp_HD_x2_fp16_op17.onnx"
+Model = "the_database_AnimeJaNaiV2L1_x2_fp16_op17.onnx"
 Fp16_Qnt = True
 Gpu = 0
 Gpu_T = 2

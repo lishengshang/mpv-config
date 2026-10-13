@@ -8,6 +8,7 @@ cache/
 state/
 files/
 playlists/
+__pycache__/
 
 scripts/webtorrent.js
 
