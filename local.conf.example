@@ -20,3 +20,7 @@
 # alass 可执行文件，autosubsync.lua 的字幕同步后端。
 # 默认值 alass_path=alass 是裸名，靠 mpv.exe 同目录或 PATH 解析，通常无需在此设置。
 #script-opts-append=autosubsync-alass_path=C:\path\to\alass.exe
+
+# assrt.net 字幕搜索 API token，sub-assrt.lua 使用。脚本内预设的是上游作者的 key，
+# 建议到 https://assrt.net 注册自己的，避免依赖别人的配额而随时失效。
+#script-opts-append=sub_assrt-api_token=你的token
