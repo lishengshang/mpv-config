@@ -13,10 +13,6 @@
 # 下载:https://github.com/YouROK/TorrServer
 #script-opts-append=mpv_torrserver-torrserver_path=C:\path\to\TorrServer-windows-amd64.exe
 
-# faster-whisper 可执行文件，sub-fastwhisper.lua 的 AI 字幕后端。
-# 下载:https://github.com/Purfview/whisper-standalone-win
-#script-opts-append=sub_fastwhisper-fast_whisper_path=C:\path\to\faster-whisper-xxl.exe
-
 # alass 可执行文件，autosubsync.lua 的字幕同步后端。
 # 默认值 alass_path=alass 是裸名，靠 mpv.exe 同目录或 PATH 解析，通常无需在此设置。
 #script-opts-append=autosubsync-alass_path=C:\path\to\alass.exe
