@@ -111,11 +111,6 @@
     "dest":"~~/shaders/Anime4K"
   },
   {
-    "git":"https://github.com/tomasklaen/uosc",
-    "whitelist":"%.lua$|%.json$|%.md$|LICENSE%.LGPL",
-    "dest":"~~/scripts/uosc"
-  },
-  {
     "git":"https://github.com/Tony15246/uosc_danmaku",
     "branch":"main",
     "whitelist":"%.lua$|%.md$|LICENSE$",
