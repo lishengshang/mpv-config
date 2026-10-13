@@ -108,7 +108,7 @@
     "git":"https://github.com/bloc97/Anime4K",
     "whitelist":"%.md$|%.glsl$",
     "blacklist":"tensorflow",
-    "dest":"~~/shaders/Anime4k"
+    "dest":"~~/shaders/Anime4K"
   },
   {
     "git":"https://github.com/tomasklaen/uosc",
@@ -117,6 +117,7 @@
   },
   {
     "git":"https://github.com/Tony15246/uosc_danmaku",
+    "branch":"main",
     "whitelist":"%.lua$|%.md$|LICENSE$",
     "dest":"~~/scripts/uosc_danmaku"
   }
