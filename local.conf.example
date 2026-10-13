@@ -1,0 +1,22 @@
+# local.conf 模板 —— 复制为 local.conf 后改成实际路径。local.conf 已被 .gitignore 排除。
+#
+# 用途:承载所有机器相关的绝对路径，让被跟踪的配置保持可移植。
+# 由 mpv.conf 末尾的 include="~~/local.conf" 载入；文件不存在时 mpv 只打印一行
+# "Failed to open ~~\local.conf" 后继续启动，不影响播放。
+#
+# 语法要点:script-opts 的键分隔符是连字符 "-"，不是冒号 ":"。
+# 写成 name:key=value 不会报错，但永远匹配不上（mpv 的 player/lua/options.lua:95
+# 用 identifier.."-" 作前缀匹配）。
+# script-opts 的优先级高于 script-opts/*.conf 文件，所以本文件可覆盖仓库内的默认值。
+
+# TorrServer 可执行文件。仅当 script-opts/mpv_torrserver.conf 里 torrserver_init=yes 时需要。
+# 下载:https://github.com/YouROK/TorrServer
+#script-opts-append=mpv_torrserver-torrserver_path=C:\path\to\TorrServer-windows-amd64.exe
+
+# faster-whisper 可执行文件，sub-fastwhisper.lua 的 AI 字幕后端。
+# 下载:https://github.com/Purfview/whisper-standalone-win
+#script-opts-append=sub_fastwhisper-fast_whisper_path=C:\path\to\faster-whisper-xxl.exe
+
+# alass 可执行文件，autosubsync.lua 的字幕同步后端。
+# 默认值 alass_path=alass 是裸名，靠 mpv.exe 同目录或 PATH 解析，通常无需在此设置。
+#script-opts-append=autosubsync-alass_path=C:\path\to\alass.exe

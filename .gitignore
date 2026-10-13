@@ -2,6 +2,7 @@
 *.xml
 *.txt
 config.json
+/local.conf
 
 cache/
 state/
