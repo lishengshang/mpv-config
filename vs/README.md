@@ -1,6 +1,10 @@
 # VapourSynth 滤镜预设
 
-13 个预设，全部走 GPU 推理，每个是一个独立 `.vpy`，经 `input.conf` 用 `cycle-commands` 按需 toggle。
+15 个预设，核心滤镜全部走 GPU，每个是一个独立 `.vpy`，经 `input.conf` 按需 toggle。新增两项 CUDA 降噪直接使用 mpv 的 `vf toggle`；既有预设保留原绑定。
+
+**新电脑仅安装 mpv 和复制本文件夹不会自动获得 VS 运行时。** 安装与实际产帧自检见 [GPU 快速上手](../docs/gpu-setup.md)。RTX 用户优先选 TRT/CUDA；DML 预设保留用于后端对照，不在 RTX 默认自检集合中。
+
+实时播放先试随配置附带的 ArtCNN C4F16/C4F32 shader (`CTRL+ALT+1/2`)；现有 R8F64 是重画质档，保留当前个人参数，按需开启。上游 ArtCNN 将 C 系列定位为实时播放，R 系列主要定位为非实时处理。
 模板衍生自 [hooke007/mpv_PlayKit](https://github.com/hooke007/mpv_PlayKit/wiki/3_K7sfunc)，函数来自 k7sfunc 1.8.1。
 
 纯 CPU 推理的预设（MVTools / QTGMC / CCD）已移至 `archive/vs/`，见文末。
@@ -30,9 +34,11 @@
 | `)` | `SR_Anime1080Fixer_TRT` | Anime1080Fixer SUC | TRT | **1×** | **不放大**，只修复 1080p 动画的压缩瑕疵 |
 | `ALT+_` | `MIX_SR_MEMC_TRT` | ArtCNN R8F64 + RIFE 4.25lite | TRT | 2× + 补帧 | 一次开超分与补帧，两者都取轻量档 |
 | `'` | `NR_BM3D_CUDA` | BM3D | CUDA | — | 强降噪，`Nr_Lv=[5,0,0]` |
+| `!` | `NR_BILATERAL_CUDA` | Bilateral | CUDA | — | 轻微亮度噪点；直接复用 `k7f.BILA_NV`，无需 ONNX |
+| `+` | `NR_DFTTEST_CUDA` | DFTTest2 | CUDA/NVRTC | — | 频域时空降噪；直接复用 `k7f.DFTT_NV`，无需 ONNX |
 | `ALT+~` | — | `vf clr` | — | — | 清空所有视频滤镜（与音频侧 `` ALT+` `` 成对） |
 
-空闲键位：`!`、`+`、`/`（原属已归档的 CPU 预设）。
+空闲键位：`/`（原属已归档的 CPU 预设）。`!` 与 `+` 现用于新增 CUDA 降噪。
 
 ## A/B 对比组
 
@@ -46,7 +52,7 @@ TensorRT 与 DirectML 共用同一批 ONNX 模型文件，所以后端对比不�
 
 ## 模型文件
 
-位于 `vs-plugins/models/`（在 `portable_config` 之外，与 `mpv.exe` 同级），不进版本控制。
+位于 `vs-plugins/models/`（在 `portable_config` 之外，与 `mpv.exe` 同级），不进本仓库版本控制。ArtCNN 放 `models/ArtCNN/` 子目录；自定义 UAI 模型放 `models/` 根目录。
 
 | 模型 | 使用者 | 来源 |
 |---|---|---|
@@ -95,8 +101,8 @@ ArtCNN 的模型编号是 vsmlrt 的枚举（`k7sfunc/_external/vsmlrt.py` 的 `
 
 ## 依赖与故障排查
 
-- **运行时必须与 `mpv.exe` 同级**：`python314.dll`、`VSScript.dll`、`Lib/`、`vs-coreplugins/`、`vs-plugins/`。mpv 没有任何选项能指定 VSScript 的加载路径（`--help=vapour` 返回 0 项），所以这套东西搬不走。缺了它 13 个预设全部报错，但配置其余部分照常工作。
+- **本项目采用上游便携运行时部署**：Python、`VSScript.dll`、`portable.vs`、`Lib/`、`vs-coreplugins/`、`vs-plugins/` 与 `mpv.exe` 同级，保留部署包的完整附属文件，不能只复制上述几个名称。缺依赖时 VS 功能不可用，独立 GPU shader 仍可用。
 - **TensorRT 预设首次运行会构建引擎缓存**（写入 `vs-plugins/models/**/*.engine`），慢是正常的；换分辨率或换模型会重建。
-- **CUDA 报 `driver version is insufficient`** → NVIDIA 驱动需 ≥ 580.65。
-- 驱动更新后跑仓库根目录的 `verify_vs_filters.bat` 做 13 项无头自检。
+- **CUDA 报 `driver version is insufficient`** → 按所用 CUDA/TensorRT 包的驱动要求更新 NVIDIA 驱动，旧的最低版本不能保证兼容所有新包。
+- 驱动/运行时更新后跑本仓库 `tools/verify-gpu.ps1 -Run`，RTX 集合为 12 项 VS 加 2 项新增 shader。仓库外旧 `verify_vs_filters.bat` 仅作历史辅助，不作为通过依据。
 - `SR_ARTCNN_CHROMA_TRT` 绕开了 `k7sfunc.ARTCNN_NV`（后者把 `model` 限死在 6/7/8，见 `mod_scale.py:98`），直接调 `vsmlrt.ArtCNN`，因为 k7sfunc 1.8.1 不支持 Chroma 模型。上游对 Chroma 模型的约定见 ArtCNN README：用于 4:2:0 BT.709 内容，色度须先经 bilinear 放大。
