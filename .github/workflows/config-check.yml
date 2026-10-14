@@ -1,0 +1,26 @@
+name: Configuration checks
+
+on:
+  push:
+    branches: [dev, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-config:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Offline regression tests (no mpv or GPU required)
+        run: python tools/test_check_config.py ReferenceChecks WiringChecks
+      - name: Project references and script wiring
+        run: python tools/check_config.py

@@ -49,3 +49,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/check-config.ps1 -Mpv 
 接口依据：[mpv 脚本命名与目录入口](https://mpv.io/manual/master/#script-location)、[命名绑定的消息入口实现](https://github.com/mpv-player/mpv/blob/master/player/lua/defaults.lua)。源码中存在声明不证明该分支已执行、模块能加载或功能正常，实际脚本/媒体回归仍需单独运行。
 
 2026-10-14 最终验收：31 项回归（22 项无需 mpv、9 项原生解析）全部通过；当前仓库读取 129 个配置/源码文件，0 errors、0 warnings，59 条 literal 源码匹配与 49 条需运行确认的引用。39 个去重 INFO 包含脚本运行边界和 InputEvent 重叠。离线模式在没有 mpv 时不能检查等价键名与原生命令语法。
+
+## Windows CI
+
+`.github/workflows/config-check.yml` 在 `dev`/`master` push、PR 或手动触发时运行，复用官方 [checkout](https://github.com/actions/checkout) 与 [setup-python](https://github.com/actions/setup-python)，固定 action 提交和 Python 3.12。仅检查 Git 中的配置与源码，不下载 VS、模型或播放器，不依赖私人配置。
+
+```powershell
+python tools/test_check_config.py ReferenceChecks WiringChecks
+python tools/check_config.py
+```
+
+CI 运行 22 项离线回归和项目引用/接线检查；不运行 9 项 mpv 原生解析回归、不验证动态 handler 或 GPU。Windows runner 与项目目标一致，避免把当前 Windows 路径大小写约定当作 Linux 兼容性保证。需在未来推送后确认远端 workflow 实际结果，本轮仅验证上述步骤在本机可执行。
