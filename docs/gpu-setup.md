@@ -1,132 +1,103 @@
-# 新电脑安装与 GPU 滤镜
+# GPU 使用与部署
 
-本配置面向 Windows NVIDIA RTX，默认取舍为实时播放优先，重画质按需开启。所有新增效果的核心计算使用 GPU；VS 图像格式转换、帧调度等仍可能使用 CPU。
+本配置面向 Windows NVIDIA RTX，按需开启增强。核心滤镜在 GPU 运行，VS 格式转换与调度仍可能使用 CPU。预设、模型和键位的完整对应见 [vs/README.md](../vs/README.md)。
 
-## 先获得可用的轻量超分
+## 日常操作
 
-1. 安装支持 `gpu-next` 的 64 位 Windows mpv，将本仓库放到 `mpv.exe` 同级的 `portable_config/`。
-2. 更新 NVIDIA 驱动，在双显卡笔记本的 Windows 图形设置里将 mpv 选为高性能 GPU。
-3. 打开 SDR 动画，把窗口放大或全屏。按 `CTRL+ALT+1` 使用 ArtCNN C4F16；性能足够时按 `CTRL+ALT+2` 使用 C4F32。`CTRL+0` 清空着色器。
+将配置放在 `mpv.exe` 同级的 `portable_config/`，使用支持 `gpu-next` 的 64 位 mpv。uosc 主菜单 → **GPU 增强**，按轻量、补帧、降噪、重画质分组：
 
-这两个 shader 已随配置提供，不需要 Python、VS、ONNX 模型或 TensorRT。选择时替换当前 shader 列表，避免叠加多个超分；不会清空 VS 滤镜，切换路线前可按 `ALT+~` 清空 VS。
+| 用途 | 入口 |
+| --- | --- |
+| SDR 动画轻量超分 | ArtCNN C4F16 `CTRL+ALT+1`；C4F32 `CTRL+ALT+2` |
+| 补帧 | RIFE TRT `$`；DRBA TRT `%` |
+| 降噪 | Bilateral CUDA `!`；DFTTest CUDA `+`；BM3D CUDA `'` |
+| 重画质/组合 | 菜单选择；具体模型和键位见 VS 表 |
 
-维护者可运行 `tools/export-config.ps1` 导出 `cache/packages/mpv-portable-config.zip`；使用 Git 选取已跟踪和未忽略文件，并排除 `local.conf`、缓存与私人记录。配置 ZIP 解压到 `mpv.exe` 同级后会生成 `portable_config/`。构建工具需要 Git 与 7-Zip，接收者解压使用不需要 Git。
+- 一次管理一个增强，选另一项替换，重复选择关闭；超分加补帧使用既有 MIX 预设。
+- shader 随配置提供，不需要 Python/VS；目标宽高均超过源尺寸 1.3 倍才触发，原尺寸显示可能没有变化。VS 则需要外部运行时、插件和模型。
+- **恢复默认 GPU 增强** 只撤销此入口的 VS 标签和 shader，保留其他滤镜；`ALT+~` 清空全部视频滤镜，`CTRL+0` 清空全部 shader。
+- 下一文件撤销临时增强，独立于全局 `CTRL+R` 重置模式；watch-later 不保存滤镜/shader 链。
+- shader 开启前的列表在关闭时恢复；若其他入口已改列表，放弃旧列表恢复权，避免覆盖新选择。
+- 缺依赖项仍可点击查看原因。VS 初始化失败、超时或换文件会取消/回滚；后续帧失败关闭该增强。首次 TRT 引擎构建或 shader 编译可能较慢。
 
-**VS 是可选增强包**，基础配置不要求下载它。尚未安装时不要启用视频滤镜菜单里的 VS 预设；安装后再开启这些功能。
+既有 VS 超分常用 `H_Pre=720`、`H_Max=1440`，可能先降采样再处理；模型 2× 不等于原片最终尺寸 2×。保留个人调参，比较同片段原始输出与单项增强；菜单分组不代表画质或实时速度排名。
 
-## 将这台电脑的可用 VS 做成可选压缩包
+## 安装可选 VS
 
-已有验证过的运行时，可以直接复用打包，不必在新电脑重新拼依赖。在本机 `portable_config` 下执行：
+仅复制配置不能获得 VS。优先复用匹配的整套便携运行时；上游入口：[mpv_PlayKit Releases](https://github.com/hooke007/mpv_PlayKit/releases) 的 NVIDIA `vsNV` 组件、[便携 Python/VS](https://github.com/hooke007/dotfiles/releases/tag/mpv_addones)、[部署说明](https://github.com/hooke007/mpv_PlayKit/wiki/3_K7sfunc)。发行资产以该页为准。
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/export-vs-addon.ps1
-```
-
-工具使用现有的 7-Zip，将便携 Python/VS、插件与现有模型导出到 `cache/packages/mpv-VS-RTX-addon.7z`，附 SHA256 并检查压缩包完整性。不会包含本项目配置、私人路径/token、播放记录或 TensorRT 引擎缓存。它打包的是本机组件，不是自动下载的最新版；用户实际分享前应核对各上游许可。
-
-新电脑只需：**安装 mpv → 放入 portable_config → 想用 VS 时把增强包解压到 mpv.exe 同级 → 双击 `portable_config/tools/verify-gpu.cmd`**。解压后应直接看到 `python.exe`、`VSScript.dll`、`vs-plugins/`，不要多套一层 `mpv-VS-RTX-addon/`。新目录安装，不与另一版 VS 混用。
-
-ArtCNN 的 C 系列由上游定位为实时播放；C4F16 是轻量档，C4F32 是更大的模型。shader 只有在目标宽高都超过源尺寸 1.3 倍时才触发，原尺寸显示看不到变化属于正常。适用重点为 SDR 动画，不宣称真人、HDR 或所有内容都变好。
-
-## 为什么只复制配置不能使用 VS
-
-`.vpy` 是调用脚本，不包含 Python、VS 动态库、CUDA/TensorRT 运行库和模型。仅安装 mpv 并复制 `portable_config` 时，上面的 shader 路线可以使用，但 VS 补帧、VS 超分和 CUDA 降噪还需要外部运行时。
-
-优先复用 [hooke007 的部署方式](https://github.com/hooke007/mpv_PlayKit/wiki/3_K7sfunc#1-使用引导)，不要另装多套混杂的 Python/VS。两个上游安装选项：
-
-- **省心路线**：[mpv_PlayKit Releases](https://github.com/hooke007/mpv_PlayKit/releases)，选择 NVIDIA 的 `vsNV` 组件包。2026-10-14 核对到 `20260510` 版，两段压缩包合计约 2.7GB。下载全部分卷，使用 7-Zip 从 `.001` 解压到临时目录，按包内目录取 Python/VS、插件与模型运行时；本项目 `portable_config` 保留，不覆盖为上游配置。先在空目录试部署，避免混用不同版 DLL。
-- **按需路线**：[便携 Python + VS 快速部署包](https://github.com/hooke007/dotfiles/releases/tag/mpv_addones) 解压到 mpv 同级，再安装 k7sfunc、[vs-mlrt](https://github.com/AmusementClub/vs-mlrt) 与使用到的 GPU 插件和模型。组件更多，适合愿意维护依赖的用户。
-
-省心路线可用本项目的导入工具：将上游包解压到独立临时目录，双击 `tools/install-vs-runtime.cmd`，输入解压目录。工具自动寻找唯一的 Python/VS 根目录，仅复制运行时组件，不复制上游 `portable_config` 或 `mpv.exe`。目标目录应只有基础 mpv 与本项目配置；已有 VS 的目录会拒绝导入，避免混合版本。导入后双击 `tools/verify-gpu.cmd` 验证。
-
-可先在终端预览复制清单：
+已有本机增强包：解压到 `mpv.exe` 同级，不多套一层目录。上游包：先完整解压到独立临时目录，再双击 `tools/install-vs-runtime.cmd` 导入；工具只复制运行时，不覆盖上游/本项目配置，已有 VS 的目标目录会拒绝混装。预览：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/install-vs-runtime.ps1 -Source "C:\Downloads\vsNV-extracted" -WhatIf
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/install-vs-runtime.ps1 -Source 'C:\Downloads\vsNV-extracted' -WhatIf
 ```
 
-导入工具不会自动下载模型或重建算法：上游包未附带的自定义模型仍需按下表补充；只想补帧和 CUDA 降噪时，不需要为未使用的超分模型额外下载。导入结束的基础检查只证明 Python/VS/k7sfunc 能导入，GPU 是否可用以自检产帧为准。
-
-快速部署包核对到 `py.3_14_3+vs.R73-portable.7z`，约 19.3MiB；这只是 Python+VS 基础，并不等于完整 GPU 滤镜包。下载资产会变化，应以对应发行页为准。不要只取一个 `VSScript.dll`，整套匹配的 Python、VS 和附属文件都要保留。
-
-按需安装 k7sfunc 时，在 mpv 同级运行：
-
-```powershell
-.\python.exe -m pip install "k7sfunc==1.8.1"
-```
-
-1.8.1 是本轮验证版本，不默认 `-U` 升级所有依赖；首次部署缺 pip 时按部署包与上游指引处理。完整 vsNV 包已有匹配的依赖时先检查，再决定是否安装，避免覆盖它的组件。
-
-## 目录与模型
-
-以下是关键位置示意，并非运行时文件的完整清单；部署包内所有附属 DLL、`.pyd`、zip、配置文件也需保留。
+关键布局（部署包其余 DLL、pyd、zip、配置也必须保留）：
 
 ```text
 mpv/
-  mpv.exe, mpv.com
-  python.exe, python3.dll, python314.dll, python314._pth, python314.zip
-  VSScript.dll, portable.vs
+  mpv.exe, python.exe, VSScript.dll, portable.vs
   Lib/site-packages/k7sfunc/
   vs-coreplugins/
   vs-plugins/
-    vstrt.dll, akarin.dll
-    vsmlrt-cuda/                 # TensorRT / CUDA runtime and trtexec
-    bilateralgpu_rtc.dll         # new Bilateral denoise
-    dfttest2_nvrtc.dll           # new DFTTest denoise
-    bm3dcuda_rtc.dll
-    models/
-      rife/, drba/              # models from matching vs-mlrt package
-      ArtCNN/
-        ArtCNN_R8F64.onnx
-        ArtCNN_R8F64_Chroma.onnx
-      the_database_AnimeJaNaiV2L1_x2_fp16_op17.onnx
-      the_database_AnimeJaNaiV3L1_sharp_HD_x2_fp16_op17.onnx
-      Phhofm_HFA2kCompact_x2_fp16_op17.onnx
-      Zarxrax_Anime1080Fixer_SUC_x1_fp16_op17.onnx
+    vstrt.dll, akarin.dll, vsmlrt-cuda/
+    bilateralgpu_rtc.dll, dfttest2_nvrtc.dll, bm3dcuda_rtc.dll
+    models/ArtCNN/, models/rife/, models/drba/
+    models/<自定义 UAI 模型>.onnx
   portable_config/
-    mpv.conf, input.conf, profiles.conf
-    vs/, shaders/, tools/
 ```
 
-ArtCNN 模型位于 `models/ArtCNN/`，自定义 UAI 模型位于 `models/` 根部，不能把它们全放进同一个子目录。具体来源与文件对应见 [VS 说明](../vs/README.md)。模型缺失或 DLL 不匹配时，基础导入检查可能通过，实际产帧检查会失败。
+基础 Python/VS 包不等于 GPU 全依赖；按需部署还需 k7sfunc、[vs-mlrt](https://github.com/AmusementClub/vs-mlrt)、插件与模型。本机历史验证 k7sfunc 1.8.1，完整包已有匹配依赖时不要直接全量升级。ArtCNN 放 `models/ArtCNN/`，自定义 UAI 放 `models/` 根部。导入成功只证明可导入，不证明能产帧。
 
-换电脑不要迁移 `.engine` 缓存；模型 `.onnx` 可以迁移。TensorRT 首次在新 GPU/新环境上构建引擎可能耗时，等初始化结束再判断实时性能。驱动要求由选用 CUDA/TensorRT 版本决定，不能拿本机驱动或旧的最低版本作为所有包的保证。
+双显卡机器确认 mpv 使用高性能 GPU；驱动须满足所选 CUDA/TRT 包要求。换机器迁移 ONNX，不迁移 `.engine` 缓存；新环境首次构建后再评估性能。
 
-## 检查与验收
+## 自检与导出
 
-在 `portable_config` 下运行（或给脚本完整路径）：
+在配置根目录执行：
 
 ```powershell
-# 只检查运行时导入并列出 RTX 预设，不会把结果称为运行通过
+# 导入检查与预设清单
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/verify-gpu.ps1
-
-# 逐项验证 RTX VS 与新增 shader；shader 检查会短暂打开测试窗口
+# RTX VS 与 shader 实际输出
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/verify-gpu.ps1 -Run
-
-# 单测一个预设，首次构建太慢可以提高单项超时
+# 首次构建慢时提高单项超时
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/verify-gpu.ps1 -Run -Kind vs -Preset MEMC_RIFE_TRT -Timeout 600
+# 导出基础配置 / 本机可选 VS 包
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/export-config.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/export-vs-addon.ps1
 ```
 
-脚本调用便携包 `python.exe`；测试别处的 mpv 可用 `-MpvRoot` 指定目录。只装 mpv 的 shader 用户可以直接按键播放验证；自动检查工具需要 Python，可在部署 VS 包后使用。检查工具忽略播放器配置以隔离依赖问题，不能代替最终配置的快捷键、下一文件与恢复默认回归。
+双击 `tools/verify-gpu.cmd` 做运行自检；`-MpvRoot` 可指定另一播放器目录。工具需要 Python，但 shader 播放本身不需要。VS 要求进程成功、日志有效、无已知错误并至少输出三张有效 PNG；shader 使用 gpu-next 2× 窗口截图和 ArtCNN hook 日志。失败、缺输出、超时均返回非零，报告在 `cache/gpu-check/`。耗时含初始化/编译/截图，不能当稳定帧率。
 
-VS 检查要求进程成功、日志存在、没有已知滤镜错误，并实际写出至少三张有效 PNG。shader 检查使用 `gpu-next` 的 2 倍窗口截图和 ArtCNN hook 注册日志，避免用 `vo=image` 假装验证 shader。日志、截图与 JSON 结果保存在 `cache/gpu-check/`，该目录不进 Git；进程失败、缺输出和超时返回非零退出码。报告的耗时包括初始化/编译/PNG，不是实时帧率。
+检查隔离播放器配置，功能验收还需菜单/键位、下一文件和恢复默认。控制状态回归用 `tools/test_gpu_effects.lua`，探针用 `tools/test_gpu_probe.py`；播放测试：
 
-## 用什么效果
+```powershell
+..\mpv.com --no-config --load-scripts=no --script=tools/test_gpu_effects.lua --idle=yes --vo=null --ao=null --osc=no
+..\python.exe tools/test_gpu_probe.py
+..\python.exe tools/test_gpu_ux.py --case playback
+..\python.exe tools/test_gpu_ux.py --case playback --paused
+..\python.exe tools/test_gpu_ux.py --case no-vs
+..\python.exe tools/test_gpu_ux.py --case failure
+```
 
-| 需求 | 先试 | 需要时再试 |
-| --- | --- | --- |
-| SDR 动画放大，易部署 | C4F16 shader (`CTRL+ALT+1`) | C4F32 shader (`CTRL+ALT+2`)、AnimeJaNai VS (`*`) |
-| 动画亮度重建 | ArtCNN C shader | ArtCNN R8F64 VS (`&`)，重画质档 |
-| 4:2:0 BT.709 色度重建 | 原始输出作 A/B 基准 | ArtCNN Chroma VS (`ALT+&`) |
-| 真人影视低分辨率放大 | 原始输出/既有缩放器作基准 | HFA2k VS (`(`)，检查纹理与伪细节 |
-| 通用补帧 | RIFE TRT (`$`) | 动画 DRBA TRT (`%`)，检查运动边缘与切镜 |
-| 轻微噪点 | Bilateral CUDA (`!`) | DFTTest CUDA (`+`) |
-| 噪点较明显 | DFTTest CUDA (`+`) | BM3D CUDA (`'`)，检查细节损失 |
+播放测试只加载 uosc、GPU 脚本和输入绑定，日志/截图在 `cache/gpu-ux/`；默认 1280×720/30fps，不覆盖全部日常脚本。640×360 暂停长序列的已知失败和当前未提交验收见 [项目状态](../PROJECT_STATE.md)。
 
-效果都按需开启，不自动给每段视频套降噪和补帧。先单项 A/B，再考虑组合，避免双重超分、重复降噪与显存争用。普通净源通常无需降噪；保留胶片颗粒时尤其谨慎。
+导出产物在 `cache/packages/`：基础配置 ZIP、`mpv-VS-RTX-addon.7z` 与 SHA256。需要 Git/7-Zip；配置排除私人文件/缓存，VS 包不含配置和引擎缓存。它是本机组件快照，使用前核对附带 SHA256 与上游许可；旧包不自动包含后续代码修改。
 
-既有 VS 超分的个人参数多为 `H_Pre=720`、`H_Max=1440`：高于 720p 的源可能先降到 720p 再处理，输出再限制到 1440p。这是控制负载的取舍，不是任意片源都保留原始细节的保证；表中的“2×”指模型倍率，不一定是原片最终尺寸倍率。迁移到不同屏幕先看各 `.vpy` 的参数；本轮保留这些调参，新增 C 系列 shader 跟随窗口输出尺度，适合先尝试的实时路线。
+## 控制接口
 
-暂不新增 DPIR 去块/降噪：上游支持 RTX，但需要独立模型包（核对到约 460MiB）与额外引擎构建，当前机器未部署也未验证。Real-CUGAN、SCUNet 等也不能只凭名字就标为“效果更好”；后续有对应片源与模型，再选少量候选实测。
+脚本 `scripts/gpu-effects.lua` 的标识为 `gpu_effects`，消息为 `menu`、`toggle <预设ID>`、`reset`、`clear-vf`、`clear-shaders`、`help`；状态属性 `user-data/gpu-effects`，VS 标签 `gpu-effects` 不供其他脚本复用。
 
-上游解释入口：[k7sfunc 参数与 GPU 后端](https://github.com/hooke007/mpv_PlayKit/wiki/3_K7sfunc)、[VS 用户滤镜](https://github.com/hooke007/mpv_PlayKit/wiki/3_FILTER)、[GLSL shader](https://github.com/hooke007/mpv_PlayKit/wiki/4_GLSL)、[ArtCNN 架构与模型用途](https://github.com/Artoriuz/ArtCNN)、[vs-mlrt 运行后端](https://github.com/AmusementClub/vs-mlrt/wiki)。
+选项读取标识 `gpu-effects`，文件 `script-opts/gpu-effects.conf`；探针超时默认 20 秒、初始化 300 秒。机器路径在忽略的 `local.conf` 用 `script-opts-append=gpu-effects-runtime_path=...` 覆盖。只读 AST 探针不运行预设；动态依赖仍由初始化判断。
+
+`vf add` 返回成功及 `video-reconfig` 都可能早于实际 VS 初始化；脚本等待明确完成日志后才确认应用，之后监听错误。不同 mpv 版本缺少完成信号会超时回滚。shader “已选择”仅表示列表设置成功，实际渲染以画面/自检为准。
+
+## 历史验证边界
+
+继承 2026-10-14 的记录，提交 `3bc9548`、`fb42716`：RTX 4070 Laptop 8188MiB、驱动 616.92、mpv `v0.41.0-1017-g02a595ddc`、Python 3.14.4、VS R73、k7sfunc 1.8.1。
+
+- 12 个 RTX VS 各产出三张 PNG，两个 shader 经 640×360 → 1280×720 D3D11 渲染通过；报告分别在 `cache/gpu-check/20261014-124711-950574/`、`cache/gpu-check/20261014-125424-755735/`。
+- 5 项自检故障回归通过。增强包完整性与独立目录 Bilateral/RIFE 迁移产帧通过；报告在 `cache/gpu-check/20261014-130129-942624/`、`cache/gpu-check/20261014-130133-369582/`。
+- 无 VS 基础目录的 C4F16 渲染通过，临时副本已清理；该副本报告不再保留。三个 DML、其他硬件、HDR、长时播放、主观画质和真实片源实时帧率未验证。
+
+本次文档精简没有重跑上述测试。证据缓存不随仓库分发，接手时核对文件或重跑；不能仅凭这份摘要宣布新环境通过。

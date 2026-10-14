@@ -32,9 +32,9 @@ PS：自行编辑配置文件时，注意编码格式应为 UTF-8，换行符为
 
 ### 脚本着色器说明
 
-本地开发与多 agent 协作规范见 [AGENTS.md](AGENTS.md) 和 [开发指南](docs/development.md)；GPU VS 预设与键位见 [vs/README.md](vs/README.md)。
+本地开发约束见 [AGENTS.md](AGENTS.md)；跨会话接手时核对 [在途工作与已知问题](PROJECT_STATE.md)。小修改不另建任务文档。
 
-Trae、Zcode、WorkBuddy、GPT 等工具接手时先读 [共享项目状态](PROJECT_STATE.md) 和 [跨工具协作协议](docs/collaboration.md)。
+GPU VS 预设与键位见 [vs/README.md](vs/README.md)；AI 字幕操作、缓存与候选方案见 [AI 字幕](docs/ai-subtitles.md)。
 
 本项目使用的 mpv 脚本及功能介绍详见 wiki 内容： [脚本说明-wiki](https://github.com/dyphire/mpv-config/wiki/脚本说明)
 

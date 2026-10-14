@@ -1,46 +1,32 @@
-# 共享项目状态
+# 在途工作与已知问题
 
-这是跨 AI 工具的当前状态入口。任何工具接手前都要核对 Git 与实际文件，不能只凭本页判断任务完成。
+更新：2026-10-14（Asia/Shanghai）。仅保存接手必需的信息；先核对 Git、diff 与证据，旧报告不代表当前验证。开发约束见 [AGENTS.md](AGENTS.md)。
 
-## 基线
+## 未提交功能
 
-- 更新日期：2026-10-14（Asia/Shanghai）。
-- GPU 整理起始基线：`b506dbb`，GPU 工具基线 `fb42716`；配置检查起始基线 `40464e3`，检查工具与 CI 基线 `538243e`。状态文档的后续维护提交以 Git 历史为准。
-- 项目：Windows mpv portable_config 配置与脚本集。
-- 目标：在保留个人调参和上游兼容性的前提下，提高功能稳定性、可移植性与可验证性。
-- 状态维护者：当前接手的集成人；尚未指定长期维护工具。
+- **GPU 菜单（原 UX-001）**：字幕会话之外的 GPU 集成人已完成 17 个统一入口、依赖提示与初始化回滚。文件：`scripts/gpu-effects.lua`、`script-opts/gpu-effects.conf`、`tools/gpu_probe.py`、`tools/test_gpu*`、`input.conf` 的 GPU 绑定。下一步处理下述 DRBA 问题；用法见 [GPU 指南](docs/gpu-setup.md)。
+- **右键菜单（原 UI-001）**：`input.conf` 的右键已改为 `uosc menu-blurred`，原生绑定留作注释；原菜单集成人已交付。隔离播放验证菜单开关、下一文件与恢复播放，证据 `cache/ui-001/`。完整日常脚本组合及物理鼠标操作未验收。
+- **AI 字幕缓存（原 ASR-002）**：字幕会话仍为单写入者，负责 `scripts/sub-fastwhisper.lua`、`script-opts/sub_fastwhisper.conf`、`script-modules/ai-subtitle-cache.lua` 与 `tools/test_ai_subtitles*`。当前代码已改为集中缓存、完成结果复用、卸载取消与旧回调隔离；这是静态核对，最终运行验收尚待该会话交接。说明统一更新 [AI 字幕](docs/ai-subtitles.md)，不要覆盖其在途实现。
+- 字幕下一步：验收真实 turbo CUDA 生成、重复打开复用、不同目录同名媒体隔离、失败/半成品不复用、下一文件与字幕重置；确认媒体目录无新增字幕。旧调研发现的退出码判定、空 key 同步探测与路径回退问题，须对新实现重新复现，不能沿用旧行号或宣布已修复。
 
-## 已有能力与证据
+## DRBA 暂停切换失败（原 VS-002，待定位）
 
-| 内容 | 当前证据 | 验证边界 |
-| --- | --- | --- |
-| 次字幕菜单与快捷键 | `b506dbb`、`4bf9bc3`，配置已检查 | 本轮未做实际播放回归 |
-| Whisper CUDA 推理设置 | `062f97b` 提交描述记录约 12 倍实时 | 属于历史记录，本轮没有重测 |
-| 15 个 GPU VS 预设、2 个实时 ArtCNN shader | `VS-001`、`docs/gpu-verification.md` | 12 个 RTX VS 与 2 个 shader 实测通过；3 个 DML 本轮未测 |
-| 机器配置隔离 | `local.conf.example`、`.gitignore` | 私人路径和 token 不写入共享交接 |
-| 项目开发规范与跨工具交接 | `9490769`、`AGENTS.md`、任务 `COORD-001` | 已分类提交；各工具自动加载仍需分别验证 |
+- 基线：`dev / ec12168` 加 GPU 菜单未提交改动；RTX 4070 Laptop 8GB、驱动 616.92、mpv `v0.41.0-1017-g02a595ddc`、既有便携 VS/k7sfunc。
+- 复现场景：640×360/30fps 源、1280×720 窗口，暂停状态反复切换 Bilateral/DFTTest/RIFE，等待 C4F32 首次编译，清空 shader 后开启 DRBA。
+- 观察：`operator (): no valid optimization profile found`，控制脚本回滚，完整序列超时。证据：`cache/gpu-ux/20261014-230420-playback-paused/{report.json,player.log}`。
+- 同尺寸 DRBA 在新进程独立输出三帧成功：`cache/gpu-ux/drba-640-isolated/`。1280×720 暂停序列也通过；原因未定位，不能认定为 640×360 尺寸限制。
+- 下一步：运行 `..\python.exe tools/test_gpu_ux.py --case playback --paused --source-width 640`；复现后缩小为 RIFE → 清空 → DRBA，比较新进程与非暂停状态。先核对 VS/TRT 生命周期和参数，不直接删引擎、改个人调参或升级运行时。
 
-## 当前工作
+## 现有 GPU 菜单的验收摘要
 
-- `COORD-001`：建立跨工具共享状态与纠错流程，见 `docs/tasks/COORD-001.md`。
-- `VS-001`：在 `dev` 完成 RTX GPU 滤镜、可选 VS 增强包与新电脑部署；实现提交 `3bc9548`、工具与部署提交 `fb42716`。运行与迁移验证通过；包位于本机忽略的 `cache/packages/`，不进 Git。
-- `CLEAN-001`：已清理约 4.8GiB 的测试副本与旧打包残留，保留正式包、验证证据与用户播放状态。目录用途见 `docs/directory-layout.md`。
-- 未登记其他工具的在途工作。此表没有记录不代表其他工具没有运行；并行编辑前仍需确认任务所有权。
-- `COMMIT-001`：按仓库中文标题风格完成分类提交；规范、滤镜、工具、状态记录分别成组，未推送远端。接手时仍以 `git status --short` 核对是否有后续改动。
-- `CHECK-002`：已完成；引用检查 `627414a`、原生解析 `050a2c7`、脚本接线 `ecd72dd`，另接入 Windows 离线 CI。31 项本机回归通过，CI 两条离线步骤本机通过；远端 workflow 尚未运行。双击 `tools/check-config.cmd` 使用，动态 handler 保留运行边界。
+以下继承精简前的同日记录，本次只改文档，没有重跑播放。环境与上方一致，源 1280×720/30fps。
 
-## 已知问题与待办
+- 32 项 Lua 控制断言、8 项探针测试；普通播放与暂停各 33 步，覆盖 12 个 RTX VS、两个 shader 路由、清空重开、保留用户滤镜及下一文件。
+- 通过报告：`cache/gpu-ux/20261014-230050-playback/report.json`、`cache/gpu-ux/20261014-231916-playback-paused-1280/report.json`。
+- 无 VS 和真实延迟初始化失败回滚通过：`cache/gpu-ux/20261014-230231-no-vs/report.json`、`cache/gpu-ux/20261014-230552-failure/report.json`。
+- 扩展 640×360 场景的 shader 2× 截图存在，但完整序列失败；不算整体通过。DML、HDR、长时播放、全部日常脚本组合、其他机器、主观画质和实时帧率未验收。
+- 已提交部署/滤镜的历史证据见 GPU 指南。远端 Windows CI 尚未确认运行结果；本机通过不能代替远端记录。缓存证据不随 Git 分发，接手时确认是否仍存在。
 
-| ID | 问题/任务 | 状态 | 验收条件 |
-| --- | --- | --- | --- |
-| CHECK-001 | VS 自检可靠性与可移植性 | 已完成，见 VS-001 | 仓库内工具检查退出码/超时/日志/真实输出；5 项回归通过 |
-| CHECK-002 | 统一配置静态检查 | 已完成 | 31 项回归；literal 引用、mpv 等价键位/命令解析、脚本目标与 InputEvent 配置检查；动态接线保留运行边界 |
-| UX-001 | GPU 菜单分组、缺依赖提示与恢复默认 | 待处理 | 复用现有 uosc；无 VS 时提示明确，切换/清空/下一文件行为一致 |
-| DOC-001 | GPU 新电脑部署与新增滤镜文档 | GPU 部分已完成，其它功能仍待完善 | `docs/gpu-setup.md` 与实际包、自检对应 |
+## 接手方式
 
-## 接手步骤
-
-1. 读取 `AGENTS.md`、本页、`docs/collaboration.md` 与 `docs/decisions.md`。
-2. 核对当前分支、HEAD、未提交 diff 和目标任务记录；冲突时记录差异，不盲信旧状态。
-3. 创建或更新一个任务文件，明确所有者与可写文件，再实施改动。
-4. 结束前写清结果、验证、未提交文件和下一步；集成人同步本页。
+先读 `AGENTS.md`，核对 `git status --short`、HEAD 与目标 diff；仅触及自己拥有的范围。同文件存在并行所有者时先协调。相关状态变化才更新本页，不再创建常规任务文件；功能完成且提交后删除在途条目，长期限制留在对应功能说明。
