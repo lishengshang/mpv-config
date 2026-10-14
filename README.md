@@ -4,6 +4,8 @@
 
 本地 RTX 版新电脑安装、滤镜选型和自检见 [GPU 快速上手](docs/gpu-setup.md)。轻量 ArtCNN GPU shader 随配置提供；VS 功能还需便携 Python/VS、GPU 插件和模型。
 
+修改配置后双击 `tools/check-config.cmd` 检查引用、等价键位与脚本接线；使用和验证边界见 [配置检查](docs/config-checks.md)。
+
 本项目为 windows 下 [mpv](https://github.com/mpv-player/mpv) 播放器的配置文件，应放入`mpv.exe`所在目录的`portable_config`文件夹内，
 
 或 mpv 配置默认路径`%APPDATA%/mpv/`下，这种方式全局生效。

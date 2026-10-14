@@ -56,7 +56,7 @@ class ReferenceChecks(unittest.TestCase):
 
     def test_missing_profile_in_cycle_command(self):
         self.write('input.conf', 'x script-message cycle-commands "apply-profile absent;show-text test"\n')
-        self.assertEqual(self.findings()[0].rule, 'missing-profile')
+        self.assertTrue(any(f.rule == 'missing-profile' for f in self.findings()))
 
     def test_include_cycle_is_error(self):
         self.write('profiles.conf', '[valid]\ninclude="~~/mpv.conf"\n')
@@ -124,6 +124,84 @@ class NativeChecks(unittest.TestCase):
                    f"Path('{sentinel.as_posix()}').write_text('unexpected')\"\n")
         self.assertFalse(any(f.severity == 'error' for f in self.findings()))
         self.assertFalse(sentinel.exists())
+
+
+class WiringChecks(unittest.TestCase):
+    setUp = ReferenceChecks.setUp
+    tearDown = ReferenceChecks.tearDown
+    write = ReferenceChecks.write
+    findings = ReferenceChecks.findings
+
+    def test_missing_script_target(self):
+        self.write('input.conf', 'a script-message-to absent ready\n')
+        self.assertTrue(any(f.rule == 'missing-script' and f.line == 1 for f in self.findings()))
+
+    def test_disabled_script_not_available(self):
+        self.write('scripts/test.lua.disable', 'mp.register_script_message("ready", function() end)\n')
+        self.write('input.conf', 'a script-message-to test ready\n')
+        self.assertTrue(any(f.rule == 'missing-script' for f in self.findings()))
+
+    def test_directory_identifier_and_module_registration(self):
+        self.write('scripts/file-browser/main.lua', 'require("handler")\n')
+        self.write('scripts/file-browser/handler.lua', 'mp.register_script_message("ready", function() end)\n')
+        self.write('input.conf', 'a script-message-to file_browser ready\n')
+        checker = Checker(self.root)
+        self.assertEqual(checker.run(), [])
+        self.assertEqual(checker.wiring_confirmed, 1)
+
+    def test_binding_is_also_message_handler(self):
+        self.write('scripts/test.lua', 'mp.add_key_binding(nil, "toggle", function() end)\n')
+        self.write('input.conf', 'a script-message-to test toggle\nb script-binding test/toggle\n')
+        checker = Checker(self.root)
+        self.assertEqual(checker.run(), [])
+        self.assertEqual(checker.wiring_confirmed, 2)
+
+    def test_dynamic_registration_is_deferred(self):
+        self.write('scripts/test.lua', 'mp.register_script_message(name, fn)\n')
+        self.write('input.conf', 'a script-message-to test dynamic\n')
+        findings = self.findings()
+        self.assertTrue(any(f.rule == 'script-runtime' for f in findings))
+        self.assertFalse(any(f.severity == 'error' for f in findings))
+
+    def test_script_name_collision(self):
+        self.write('scripts/my-tools.lua', '')
+        self.write('scripts/my_tools.lua', '')
+        self.assertTrue(any(f.rule == 'script-name-collision' for f in self.findings()))
+
+    def test_quoted_display_text_not_treated_as_command(self):
+        self.write('input.conf', 'a show-text "apply-profile absent;script-message-to absent ready;~~/vs/absent.vpy"\n')
+        self.assertEqual(self.findings(), [])
+
+    def test_nested_cycle_script_target_checked(self):
+        self.write('input.conf', 'a script-message cycle-commands "script-message-to absent ready"\n')
+        self.assertTrue(any(f.rule == 'missing-script' for f in self.findings()))
+
+    def test_builtin_handler_is_deferred(self):
+        self.write('input.conf', 'a script-binding stats/display-stats\n')
+        self.assertFalse(any(f.severity == 'error' for f in self.findings()))
+
+    def test_disabled_inputevent_file_not_checked(self):
+        self.write('script-opts/inputevent.conf', 'enable_external_config=no\n')
+        self.write('inputevent_key.conf', 'not-a-key not-a-command\n')
+        self.assertEqual(self.findings(), [])
+
+    def test_configured_inputevent_path_and_prefix(self):
+        self.write('script-opts/inputevent.conf', 'enable_external_config=yes\nexternal_config=~~/events.conf\nprefix=custom\n')
+        self.write('events.conf', 'a ignore #custom:repeat\n')
+        checker = Checker(self.root)
+        self.assertEqual(checker.run(), [])
+        self.assertEqual(checker.bindings[0].event, 'repeat')
+
+    def test_missing_enabled_inputevent_file(self):
+        self.write('script-opts/inputevent.conf', 'enable_external_config=yes\nexternal_config=~~/absent.conf\n')
+        self.assertTrue(any(f.rule == 'missing-inputevent' for f in self.findings()))
+
+    def test_private_inputevent_source_never_read(self):
+        self.write('script-opts/inputevent.conf', 'enable_external_config=yes\nexternal_config=~~/local.conf\n')
+        (self.root / 'local.conf').write_bytes(b'\xffprivate')
+        findings = self.findings()
+        self.assertTrue(any(f.rule == 'private-source' for f in findings))
+        self.assertFalse(any(f.rule == 'source-read' for f in findings))
 
 
 if __name__ == '__main__':
