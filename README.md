@@ -2,6 +2,8 @@
 
 ### 项目介绍
 
+本地 RTX 版新电脑安装、滤镜选型和自检见 [GPU 快速上手](docs/gpu-setup.md)。轻量 ArtCNN GPU shader 随配置提供；VS 功能还需便携 Python/VS、GPU 插件和模型。
+
 本项目为 windows 下 [mpv](https://github.com/mpv-player/mpv) 播放器的配置文件，应放入`mpv.exe`所在目录的`portable_config`文件夹内，
 
 或 mpv 配置默认路径`%APPDATA%/mpv/`下，这种方式全局生效。
@@ -27,6 +29,10 @@ PS：自行编辑配置文件时，注意编码格式应为 UTF-8，换行符为
 - 单实例模式：[umpv](https://github.com/zhongfly/umpv-go)
 
 ### 脚本着色器说明
+
+本地开发与多 agent 协作规范见 [AGENTS.md](AGENTS.md) 和 [开发指南](docs/development.md)；GPU VS 预设与键位见 [vs/README.md](vs/README.md)。
+
+Trae、Zcode、WorkBuddy、GPT 等工具接手时先读 [共享项目状态](PROJECT_STATE.md) 和 [跨工具协作协议](docs/collaboration.md)。
 
 本项目使用的 mpv 脚本及功能介绍详见 wiki 内容： [脚本说明-wiki](https://github.com/dyphire/mpv-config/wiki/脚本说明)
 
