@@ -1,12 +1,11 @@
 # 在途工作与已知问题
 
-更新：2026-10-14（Asia/Shanghai）。仅保存接手必需的信息；先核对 Git、diff 与证据，旧报告不代表当前验证。开发约束见 [AGENTS.md](AGENTS.md)。
+更新：2026-10-15（Asia/Shanghai）。仅保存接手必需的信息；先核对 Git、diff 与证据，旧报告不代表当前验证。开发约束见 [AGENTS.md](AGENTS.md)。
 
 ## 未提交功能
 
-- **GPU 菜单（原 UX-001）**：字幕会话之外的 GPU 集成人已完成 17 个统一入口、依赖提示与初始化回滚。文件：`scripts/gpu-effects.lua`、`script-opts/gpu-effects.conf`、`tools/gpu_probe.py`、`tools/test_gpu*`、`input.conf` 的 GPU 绑定。下一步处理下述 DRBA 问题；用法见 [GPU 指南](docs/gpu-setup.md)。
-- **右键菜单（原 UI-001）**：`input.conf` 的右键已改为 `uosc menu-blurred`，原生绑定留作注释；原菜单集成人已交付。隔离播放验证菜单开关、下一文件与恢复播放，证据 `cache/ui-001/`。完整日常脚本组合及物理鼠标操作未验收。
 - **AI 字幕缓存（原 ASR-002）**：字幕会话仍为单写入者，负责 `scripts/sub-fastwhisper.lua`、`script-opts/sub_fastwhisper.conf`、`script-modules/ai-subtitle-cache.lua` 与 `tools/test_ai_subtitles*`。当前代码已改为集中缓存、完成结果复用、卸载取消与旧回调隔离；这是静态核对，最终运行验收尚待该会话交接。说明统一更新 [AI 字幕](docs/ai-subtitles.md)，不要覆盖其在途实现。
+- 字幕接口联动：`input.conf` 的一条“取消 AI 字幕任务”菜单入口保留为未提交改动，等待 `sub-fastwhisper-cancel` 接收方随字幕实现提交；本次菜单提交已排除此行，避免引用未入库接口。
 - 字幕下一步：验收真实 turbo CUDA 生成、重复打开复用、不同目录同名媒体隔离、失败/半成品不复用、下一文件与字幕重置；确认媒体目录无新增字幕。旧调研发现的退出码判定、空 key 同步探测与路径回退问题，须对新实现重新复现，不能沿用旧行号或宣布已修复。
 
 ## DRBA 暂停切换失败（原 VS-002，待定位）
