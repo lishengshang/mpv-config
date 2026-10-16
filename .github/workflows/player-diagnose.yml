@@ -39,6 +39,10 @@ jobs:
           @'
           import importlib.util, os, pathlib, subprocess, sys
           root = pathlib.Path('cache/MPV').resolve()
+          trace = root.parent / 'com-trace.gdb'
+          trace.write_text('set pagination off\nset breakpoint pending on\nbreak CoUninitialize\n'
+                           'commands\nsilent\nprintf "COM UNINITIALIZE\\n"\nbt 12\ncontinue\nend\n'
+                           'run\nthread apply all bt\ninfo registers\ninfo sharedlibrary\n', encoding='utf-8')
           path = root / 'portable_config/tools/test_menu_ui.py'
           spec = importlib.util.spec_from_file_location('menu_test', path)
           module = importlib.util.module_from_spec(spec)
@@ -47,8 +51,7 @@ jobs:
           def diagnostic(args, *positional, **options):
               if pathlib.Path(args[0]).name == 'mpv.exe':
                   args = [os.environ['GDB_PATH'], '--batch', '--return-child-result',
-                          '-ex', 'set pagination off', '-ex', 'run', '-ex', 'thread apply all bt',
-                          '-ex', 'info registers', '-ex', 'info sharedlibrary', '--args', *args]
+                          '-x', str(trace), '--args', *args]
               return original(args, *positional, **options)
           subprocess.Popen = diagnostic
           sys.argv = [str(path), '--full', '--software-renderer', '--local-media']
