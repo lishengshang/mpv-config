@@ -22,5 +22,11 @@ jobs:
           python-version: '3.12'
       - name: Offline regression tests (no mpv or GPU required)
         run: python tools/test_check_config.py ReferenceChecks WiringChecks
+      - name: Offline subtitle adapter regression
+        run: python tools/test_qwen_asr.py
+      - name: Offline GPU dependency probe regression
+        run: python tools/test_gpu_probe.py
+      - name: GPU verifier failure handling (native integration skipped without mpv)
+        run: python tools/test_verify_gpu.py
       - name: Project references and script wiring
         run: python tools/check_config.py
