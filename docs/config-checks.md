@@ -61,6 +61,8 @@ Windows 构建参考 mpv 自身 MSYS2 CI，采用仍提供 mujs/rubberband 的 U
 
 从 r2 起额外检查 `secondary-sub-scale`，并对组装后的播放器执行全菜单回归：`tools/test_menu_ui.py --full --software-renderer --local-media`。CI 用本地 H.264/AAC 合成片段、D3D11 WARP 软件渲染和无增强 shader 的测试条件，提供菜单、次字幕字号、切片/重置及截图证据；不改变发行包默认画质。通过报告绑定播放器 SHA256，缺少或不匹配的 `menu-report.json` 不得发布。断言通过但进程退出异常仍失败；保留崩溃事件及 `unverified-player` 供诊断，不将其发布为候选。WARP 不替代 NVIDIA 实际渲染、VS 产帧和 AI 验收。r1 曾只通过 CPU 检查，缺少次字幕字号支持，已在该预发布说明中标为已知问题，不得晋级正式版。
 
+2026-10-16 的 r2 发行基线：云端流水线（含 WARP 105 项、正常退出及 ZIP 迁移）通过；公开 ZIP 校验后，本机 RTX 4070 Laptop 的 105 项菜单/双字幕/切片回归通过，退出码 0、错误日志为空。证据为 Release 附件及本机 `cache/release-audit/r2-published-rtx.json`；不包含 VS、ASR 或真实片源性能验收。
+
 本机只读检查上游（有未提交修改时生成不能构建/发布的审计计划）：
 
 ```powershell
