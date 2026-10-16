@@ -9,9 +9,19 @@
 local msg = require 'mp.msg'
 local utils = require 'mp.utils'
 local options = require "mp.options"
+-- Local cache/lifecycle changes: see docs/ai-subtitles.md before upstream updates.
+package.path = mp.command_native({'expand-path', '~~/script-modules/?.lua'}) .. ';' .. package.path
+local subtitle_cache = require 'ai-subtitle-cache'
 
 ---- Script Options ----
 local o = {
+    -- Default engine; menu selection lasts for this player session.
+    backend = 'whisper',
+    qwen_python = 'python',
+    qwen_model = '~~/cache/qwen-asr/models/Qwen3-ASR-1.7B',
+    qwen_aligner = '~~/cache/qwen-asr/models/Qwen3-ForcedAligner-0.6B',
+    qwen_chunk_seconds = 20,
+    ffmpeg_path = 'ffmpeg',
     -- Path to the faster-whisper executable, you can download it from here:
     -- https://github.com/Purfview/whisper-standalone-win
     -- Supports absolute and relative paths
@@ -31,10 +41,8 @@ local o = {
     threads = "0",
     -- The maximum number of characters in a line before breaking the line
     max_line_width = "100",
-    -- Specify output path, supports absolute and relative paths
-    -- Special value: "source" saves the subtitle file to the directory 
-    -- where the video file is located
-    output_path = "source",
+    -- Cache root. Legacy "source" is redirected; media directories remain untouched.
+    output_path = "~~/cache/ai-subtitles",
     -- Specify how many subtitles are generated before updating
     -- to avoid frequent flickering of subtitles
     update_interval = 20,
@@ -65,9 +73,32 @@ options.read_options(o, _, function() end)
 ------------------------
 
 local fast_whisper_path = mp.command_native({ "expand-path", o.fast_whisper_path })
-local output_path = mp.command_native({ "expand-path", o.output_path })
+local selected_backend = o.backend == 'qwen' and 'qwen' or 'whisper'
+mp.set_property_native('user-data/ai-subtitles/backend', selected_backend)
+local qwen_python = mp.command_native({'expand-path', o.qwen_python})
+local qwen_model = mp.command_native({'expand-path', o.qwen_model})
+local qwen_aligner = mp.command_native({'expand-path', o.qwen_aligner})
+local qwen_runner = mp.command_native({'expand-path', '~~/tools/qwen_subtitles.py'})
+local ffmpeg_path = mp.command_native({'expand-path', o.ffmpeg_path})
+local cache_root = mp.command_native({ "expand-path",
+    o.output_path == "source" and "~~/cache/ai-subtitles" or o.output_path })
+local output_path
 local pid = mp.get_property_native('pid')
 local temp_path = os.getenv("TEMP") or "/tmp/"
+local active_entry, active_work, subtitles_file
+local generation, recognition_job = 0, nil
+local pending_jobs, pending_timers = {}, {}
+
+local function later(seconds, callback)
+    local token = generation
+    local timer
+    timer = mp.add_timeout(seconds, function()
+        pending_timers[timer] = nil
+        if token == generation then callback() end
+    end)
+    pending_timers[timer] = true
+    return timer
+end
 
 local start_index = 1
 local subtitle_count = 1
@@ -92,16 +123,6 @@ local function file_exists(path)
     if path then
         local meta = utils.file_info(path)
         return meta and meta.is_file
-    end
-    return false
-end
-
-local function is_writable(path)
-    local file = io.open(path, "w")
-    if file then
-        file:close()
-        os.remove(path)
-        return true
     end
     return false
 end
@@ -141,6 +162,52 @@ local function normalize(path)
         end
     end
     return normalize(path)
+end
+
+local function current_entry(extra)
+    local path = mp.get_property('path')
+    if not path then return nil end
+    local protocol = is_protocol(path)
+    path = protocol and path or normalize(path)
+    local info = protocol and {} or utils.file_info(path)
+    if not info or (not protocol and not info.is_file) then return nil end
+    local backend = utils.file_info(fast_whisper_path) or {}
+    -- URLs may contain credentials; only their hash is persisted.
+    local source = protocol and ('url:' .. subtitle_cache.digest(path)) or path
+    if is_windows and not protocol then source = source:gsub('\\', '/'):lower() end
+    local identity = utils.format_json({'asr-cache-v1', source,
+        tostring(info.size or ''), tostring(info.mtime or ''),
+        tostring(mp.get_property_native('aid', 'auto')), fast_whisper_path,
+        tostring(backend.size or ''), tostring(backend.mtime or ''),
+        o.model, o.device, o.compute_type, o.language, tostring(o.use_segment),
+        tostring(o.segment_duration), tostring(o.max_line_width),
+        o.translate, o.api_mode, subtitle_cache.digest(o.api_url),
+        tostring(o.api_temperature), o.font_name, extra or ''})
+    if selected_backend == 'qwen' then
+        -- Keep existing Whisper identities unchanged; Qwen has an independent namespace.
+        identity = utils.format_json({'qwen-asr-cache-v1', source,
+            tostring(info.size or ''), tostring(info.mtime or ''),
+            tostring(mp.get_property_native('aid', 'auto')), qwen_python, qwen_model, qwen_aligner,
+            subtitle_cache.digest(subtitle_cache.read(qwen_model .. '/revision.json') or
+                subtitle_cache.read(qwen_model .. '/config.json') or ''),
+            subtitle_cache.digest(subtitle_cache.read(qwen_aligner .. '/revision.json') or
+                subtitle_cache.read(qwen_aligner .. '/config.json') or ''),
+            subtitle_cache.digest(subtitle_cache.read(qwen_runner) or ''),
+            'cuda:bfloat16:sdpa', o.language, tostring(o.qwen_chunk_seconds), tostring(o.max_line_width),
+            o.translate, o.api_mode, subtitle_cache.digest(o.api_url),
+            tostring(o.api_temperature), o.font_name, extra or ''})
+    end
+    return subtitle_cache.entry(cache_root, identity)
+end
+
+local function begin_work(entry)
+    generation = generation + 1
+    local work, err = subtitle_cache.prepare(entry, pid, generation)
+    if not work then mp.osd_message(err, 5); msg.error(err); return false end
+    active_entry, active_work = entry, work
+    output_path, temp_path = work, work
+    subtitles_file = utils.join_path(work, 'incremental.srt')
+    return true
 end
 
 local function is_text_identical(text1, text2)
@@ -222,7 +289,8 @@ local function check_sub(sub_file)
             _, track_title = utils.split_path(external_filename)
         end
 
-        if track["type"] == "sub" and track_title == sub_title then
+        if track["type"] == "sub" and external_filename and
+            normalize(external_filename) == normalize(sub_file) then
             return true, track["id"]
         end
     end
@@ -239,7 +307,62 @@ local function append_sub(sub_file, auto)
         end
     else
         mp.commandv('sub-reload', id)
+        if not auto then mp.commandv('set', 'sid', tostring(id)) end
     end
+end
+
+local function load_cached(entry, auto)
+    if is_protocol(mp.get_property('path')) then return false end
+    if not entry or not subtitle_cache.lookup(entry) then return false end
+    active_entry, subtitles_file = entry, entry.srt
+    -- Auto-add preserves an existing subtitle, but otherwise the cached subtitle should be visible.
+    if auto and mp.get_property('sid', 'no') == 'no' then auto = false end
+    append_sub(entry.srt, auto)
+    local translated = entry.srt:gsub('%.srt$', '.translate.srt')
+    local translation = subtitle_cache.read(translated)
+    if translation and subtitle_cache.valid_srt(translation) and
+        subtitle_cache.read(translated .. '.complete') == subtitle_cache.digest(translation) then
+        local ass = entry.srt:gsub('%.srt$', '.' .. o.translate .. '.ass')
+        if file_exists(ass) then append_sub(ass, auto) else append_sub(translated, auto) end
+    end
+    msg.info('AI subtitle cache reused: ' .. entry.key)
+    if not auto then mp.osd_message('已复用 AI 字幕缓存', 4) end
+    return true
+end
+
+local function finish_recognition(source)
+    local ok, err = subtitle_cache.commit(active_entry, source)
+    if not ok then mp.osd_message('AI 字幕生成失败：' .. err, 5); msg.error(err); return false end
+    local present, track = check_sub(subtitles_file)
+    if present then mp.commandv('sub-remove', track) end
+    subtitles_file = active_entry.srt
+    append_sub(subtitles_file)
+    mp.osd_message('AI 字幕已生成并缓存', 5)
+    msg.info('AI subtitle cache completed: ' .. active_entry.key)
+    return true
+end
+
+local function cleanup_work(work)
+    if not work then return end
+    -- Only a job's flat work directory; never the cache root or completed results.
+    for _, name in ipairs(utils.readdir(work, 'files') or {}) do
+        os.remove(utils.join_path(work, name))
+    end
+    os.remove(work)
+end
+
+local function reset_session()
+    generation = generation + 1
+    if recognition_job then mp.abort_async_command(recognition_job); recognition_job = nil end
+    for id in pairs(pending_jobs) do mp.abort_async_command(id) end
+    for timer in pairs(pending_timers) do timer:kill() end
+    pending_jobs, pending_timers = {}, {}
+    cleanup_work(active_work)
+    active_entry, active_work, subtitles_file = nil, nil, nil
+    whisper_running, subtitles_written, gpt_api_enabled = false, false, false
+    start_index, in_progress_batches, translated_batches_count = 1, 0, 0
+    time_ranges, progress_cache, translated_cache, state = {}, {}, {}, {}
+    mp.set_osd_ass(0, 0, '')
 end
 
 local function parse_sub(filename)
@@ -293,7 +416,9 @@ local function shift_subtitle_timestamps(temp_srt, srt_file, subtitle_count, sta
                 main_file:write(seconds_to_timestamp(start_seconds) .. " --> " .. seconds_to_timestamp(end_seconds) .. "\n")
                 subtitle_number = subtitle_number + 1
             end
-        elseif line ~= "" and not tonumber(line) then
+        elseif line == '' then
+            main_file:write('\n')
+        elseif not tonumber(line) then
             main_file:write(line .. "\n")
         end
     end
@@ -404,6 +529,7 @@ end
 -------------Translation function----------------
 -- Call the GPT API
 local function call_gpt_api(subtitles, callback)
+    if not o.api_key or o.api_key:match('^%s*$') then return nil end
     msg.info("AI subtitle translation in progress")
     local prompt = string.format("You are a professional translation assistant, " ..
     "Translate the following subtitles from the original language to %s.", o.translate)
@@ -426,7 +552,7 @@ local function call_gpt_api(subtitles, callback)
     local request_json = utils.format_json(request_body)
 
     local command = {
-        "curl", "-s", "-X", "POST", o.api_url,
+        "curl", "-s", "--connect-timeout", "10", "--max-time", "60", "-X", "POST", o.api_url,
         "-H", "Content-Type: application/json",
         "-H", "Authorization: Bearer " .. o.api_key,
         "-d", request_json
@@ -441,7 +567,7 @@ local function call_gpt_api(subtitles, callback)
         })
 
         if not result or result.status ~= 0 then
-            msg.info("API request failed: " .. (result.stderr or "Unknown error"))
+            msg.info("API request failed: " .. tostring(result and result.stderr or "Unknown error"))
             return nil
         end
 
@@ -455,14 +581,17 @@ local function call_gpt_api(subtitles, callback)
     end
 
     local abort_signal
+    local token = generation
     abort_signal = mp.command_native_async({
         name = "subprocess",
         args = command,
         capture_stdout = true,
         capture_stderr = true,
     }, function(success, result, error)
-        if not success or result.status ~= 0 then
-            msg.info("API request failed: " .. (result.stderr or "Unknown error"))
+        pending_jobs[abort_signal] = nil
+        if token ~= generation then return end
+        if not success or not result or result.status ~= 0 then
+            msg.info("API request failed: " .. tostring(result and result.stderr or "Unknown error"))
             callback(nil)
             return
         end
@@ -475,6 +604,7 @@ local function call_gpt_api(subtitles, callback)
             callback(nil)
         end
     end)
+    pending_jobs[abort_signal] = true
 
     return function()
         mp.abort_async_command(abort_signal)
@@ -646,6 +776,10 @@ local function translate_and_write(subtitles, subtitles_file)
                 msg.info("Subtitle translation completed!")
                 append_sub(translated_file)
                 generate_ass(subtitles_file)
+                local data = subtitle_cache.read(translated_file)
+                if subtitle_cache.valid_srt(data) then
+                    subtitle_cache.write(translated_file .. '.complete', subtitle_cache.digest(data))
+                end
             end
         end)
 
@@ -662,7 +796,7 @@ local function translate_and_write(subtitles, subtitles_file)
             start_index = start_index + batch_size
         else
             -- If maximum parallel translations reached, wait before trying again
-            mp.add_timeout(delay_between_calls, function()
+            later(delay_between_calls, function()
                 translate_and_write(subtitles, subtitles_file)
             end)
             return
@@ -674,12 +808,26 @@ end
 
 -- Translate .srt file
 local function translate_srt_file(subtitles_file)
-    if not o.api_key then return end
+    if not o.api_key or o.api_key:match('^%s*$') then return end
     if not subtitles_file then
         subtitles_file = get_current_sub()
     end
     if not subtitles_file then
         return
+    end
+
+    -- Translating an existing sidecar must also keep all new output inside cache.
+    local expanded = normalize(subtitles_file):gsub('\\', '/')
+    local root = normalize(cache_root):gsub('\\', '/') .. '/'
+    if is_windows then expanded, root = expanded:lower(), root:lower() end
+    if expanded:sub(1, #root) ~= root then
+        local data = subtitle_cache.read(subtitles_file)
+        if not subtitle_cache.valid_srt(data) then return end
+        local entry = current_entry('external-srt:' .. subtitle_cache.digest(data))
+        if not entry or not subtitle_cache.mkdir(entry.dir) then return end
+        local ok = subtitle_cache.commit(entry, subtitles_file)
+        if not ok then return end
+        subtitles_file = entry.srt
     end
 
     -- Parse the original subtitle file
@@ -704,6 +852,7 @@ local function fastwhisper_cmd(file_path, sub_path)
         "--max_line_width", o.max_line_width,
         "--threads", o.threads,
         "--output_dir", sub_path,
+        "--output_format", "srt",
     }
 
     if o.language ~= "" then
@@ -723,27 +872,13 @@ local function fastwhisper()
     local path = mp.get_property("path")
     local fname = mp.get_property("filename/no-ext")
     if not path or is_protocol(path) then return end
-    if path then
-        path = normalize(path)
-        dir = utils.split_path(path)
-    end
-
-    if output_path ~= "source" then
-        subtitles_file = utils.join_path(output_path, fname .. ".srt")
-    else
-        subtitles_file = utils.join_path(dir, fname .. ".srt")
-    end
-
-    if file_exists(subtitles_file) then return end
-
-    if not is_writable(subtitles_file) then
-        subtitles_file = utils.join_path(temp_path, fname .. ".srt")
-    end
+    path = normalize(path)
+    local result_file = utils.join_path(output_path, fname .. '.srt')
 
     local screenx, screeny, aspect = mp.get_osd_size()
     mp.set_osd_ass(screenx, screeny, "{\\an9}● ")
-    mp.osd_message("AI subtitle generation in progress", 9)
-    msg.info("AI subtitle generation in progress")
+    mp.osd_message((selected_backend == 'qwen' and 'Qwen3-ASR' or 'Whisper') .. ' 正在生成 AI 字幕…', 9)
+    msg.info('AI subtitle generation in progress: ' .. selected_backend)
 
     subtitle_count = 1
     append_subtitle_count = 1
@@ -751,73 +886,39 @@ local function fastwhisper()
     whisper_running = true
 
     local args = fastwhisper_cmd(path, output_path)
-    mp.command_native_async({ name = "subprocess", capture_stderr = true, args = args }, function(success, res)
+    if selected_backend == 'qwen' then
+        result_file = utils.join_path(output_path, 'qwen.srt')
+        local track = mp.get_property_native('current-tracks/audio', {})
+        local audio_map = track['ff-index'] and ('0:' .. track['ff-index']) or '0:a:0'
+        args = {qwen_python, qwen_runner, '--input', path, '--output', result_file,
+            '--model', qwen_model, '--aligner', qwen_aligner, '--ffmpeg', ffmpeg_path,
+            '--audio-map', audio_map, '--language', o.language,
+            '--chunk-seconds', tostring(o.qwen_chunk_seconds), '--max-line-width', o.max_line_width}
+    end
+    local token, job_work = generation, active_work
+    recognition_job = mp.command_native_async({ name = "subprocess", capture_stdout = true,
+        capture_stderr = true, args = args }, function(success, res)
+        if token ~= generation then cleanup_work(job_work); return end
+        recognition_job = nil
         whisper_running = false
         mp.set_osd_ass(screenx, screeny, "")
-        if res.status ~= 0 then
-            if file_exists(subtitles_file) then
-                local file = io.open(subtitles_file, "r")
-                if file then
-                    local content = file:read("*all")
-                    file:close()
-
-                    if content == "" then
-                        os.remove(subtitles_file)
-                    else
-                        mp.osd_message("AI subtitles successfully generated", 5)
-                        msg.info("AI subtitles successfully generated")
-                        if gpt_api_enabled then
-                            append_sub(subtitles_file, true)
-                            translate_srt_file(subtitles_file)
-                        else
-                            append_sub(subtitles_file)
-                        end
+        if success and res and res.status == 0 then
+            if selected_backend == 'qwen' then msg.info(res.stdout or '') end
+            if finish_recognition(result_file) then
+                if selected_backend == 'qwen' then
+                    local stats = utils.parse_json(subtitle_cache.read(utils.join_path(output_path, 'qwen-stats.json')) or '')
+                    if stats and stats.coarse_chunks > 0 then
+                        mp.osd_message('AI 字幕已缓存；该语种使用分段时间范围，建议检查时间轴', 6)
                     end
                 end
+                if gpt_api_enabled then translate_srt_file(subtitles_file) end
             end
         else
             mp.osd_message("AI subtitle generation failed, check console for more info.")
-            msg.info("AI subtitle generation failed")
+            msg.error('AI subtitle generation failed: ' .. tostring(res and res.stderr or 'subprocess failed'))
         end
     end)
 end
-
-mp.enable_messages('info')
-
-mp.register_event('log-message', function(e)
-    if e.prefix ~= mp.get_script_name() then return end
-
-    local file = subtitles_file and io.open(subtitles_file, "a")
-    if file and e.text and e.text ~= '' then
-        local text_pattern = "%[([%d+:]?%d+:%d+%.%d+)%D+([%d+:]?%d+:%d+%.%d+)%]%s*(.*)"
-        local start_time_srt, end_time_srt, subtitle_text = e.text:match(text_pattern)
-        if start_time_srt and end_time_srt and subtitle_text then
-            local start_time = format_time(start_time_srt)
-            local end_time = format_time(end_time_srt)
-
-            file:write(subtitle_count .. "\n")
-            file:write(start_time .. " --> " .. end_time.. "\n")
-            file:write(subtitle_text .. "\n")
-            file:close()
-
-            subtitle_count = subtitle_count + 1
-            subtitles_written = true
-        end
-        if subtitle_count % o.update_interval == 1 and subtitles_written then
-            if append_subtitle_count == 1 then
-                mp.osd_message("AI subtitles are loaded and updated in real time", 5)
-                msg.info("AI subtitles are loaded and updated in real time")
-            end
-            if gpt_api_enabled then
-                translate_srt_file(subtitles_file)
-            else
-                append_sub(subtitles_file)
-            end
-            subtitles_written = false
-            append_subtitle_count = append_subtitle_count + 1
-        end
-    end
-end)
 ------------------------
 
 local function extract_audio_segment(video_path, segment_audio_file, start_time, duration)
@@ -839,8 +940,8 @@ local function extract_audio_segment(video_path, segment_audio_file, start_time,
 
     local res = mp.command_native({ name = "subprocess", capture_stdout = true, capture_stderr = true, args = args })
 
-    if res and res.status ~= 0 then
-        msg.error("Error extracting audio segment: " .. segment_audio_file .. "\n" .. res.stderr)
+    if not res or res.status ~= 0 then
+        msg.error("Error extracting audio segment: " .. segment_audio_file .. "\n" .. tostring(res and res.stderr))
         return false
     end
     msg.verbose("Successfully extracted: " .. segment_audio_file)
@@ -854,11 +955,14 @@ local function process_audio_segment(segment_audio_file, subtitle_count)
     local args = fastwhisper_cmd(segment_audio_file, temp_srt_path)
     local res = mp.command_native({ name = "subprocess", capture_stdout = true, capture_stderr = true, args = args })
 
-    if res and res.status ~= 0 then
-        msg.error("faster-whisper failed for: " .. segment_audio_file .. "\n" .. res.stderr)
+    if not res or res.status ~= 0 then
+        msg.error("faster-whisper failed for: " .. segment_audio_file .. "\n" .. tostring(res and res.stderr))
+        return subtitle_count, temp_srt, false
     end
 
-    return subtitle_count, temp_srt
+    local data = subtitle_cache.read(temp_srt)
+    -- Silence-only segments may be empty; the complete cached result must be nonempty.
+    return subtitle_count, temp_srt, data == '' or subtitle_cache.valid_srt(data)
 end
 
 local function process_video_incrementally(video_path, srt_file, segment_duration)
@@ -867,6 +971,7 @@ local function process_video_incrementally(video_path, srt_file, segment_duratio
     local segment_index = 1
     local temp_srt = nil
     local file_duration = mp.get_property_number('duration')
+    if not file_duration or file_duration <= 0 then return false end
 
     while true do
         if start_time >= file_duration then
@@ -891,11 +996,13 @@ local function process_video_incrementally(video_path, srt_file, segment_duratio
         local success = extract_audio_segment(video_path, segment_audio_file, start_time_str, segment_duration)
         if not success or not file_exists(segment_audio_file) then
             msg.verbose("Audio extraction completed or failed.")
-            break
+            return false
         end
 
         msg.verbose("Processing segment: " .. segment_audio_file)
-        subtitle_count, temp_srt = process_audio_segment(segment_audio_file, subtitle_count)
+        local recognized
+        subtitle_count, temp_srt, recognized = process_audio_segment(segment_audio_file, subtitle_count)
+        if not recognized then return false end
         if file_exists(temp_srt) then
             subtitle_count = shift_subtitle_timestamps(temp_srt, srt_file, subtitle_count, start_time)
         end
@@ -911,47 +1018,26 @@ local function process_video_incrementally(video_path, srt_file, segment_duratio
         start_time = start_time + segment_duration
         segment_index = segment_index + 1
     end
+    return true
 end
 
 local function fastwhisper_segment()
     local path = mp.get_property("path")
     local fname = mp.get_property("filename/no-ext")
     if not path or is_protocol(path) then return end
-    if path then
-        path = normalize(path)
-        dir = utils.split_path(path)
-    end
-
-    if output_path ~= "source" then
-        subtitles_file = utils.join_path(output_path, fname .. ".srt")
-    else
-        subtitles_file = utils.join_path(dir, fname .. ".srt")
-    end
-
-    if file_exists(subtitles_file) then
-        msg.info("Subtitles file already exists: " .. subtitles_file)
-        return
-    end
-
-    if not is_writable(subtitles_file) then
-        subtitles_file = utils.join_path(temp_path, fname .. ".srt")
-    end
+    path = normalize(path)
 
     mp.osd_message("AI subtitle generation in progress", 9)
     msg.info("AI subtitle generation in progress")
 
     whisper_running = true
-    process_video_incrementally(path, subtitles_file, o.segment_duration)
+    local complete = process_video_incrementally(path, subtitles_file, o.segment_duration)
     whisper_running = false
 
-    if file_exists(subtitles_file) then
-        mp.osd_message("AI subtitles successfully generated", 5)
-        msg.info("AI subtitles successfully generated")
-        if gpt_api_enabled then
-            append_sub(subtitles_file, true)
-        else
-            append_sub(subtitles_file)
-        end
+    if complete and finish_recognition(subtitles_file) then
+        if gpt_api_enabled then translate_srt_file(subtitles_file) end
+    else
+        mp.osd_message('AI 字幕分段生成失败，未保存为完成缓存', 5)
     end
 end
 ------------------------
@@ -986,8 +1072,8 @@ end
 
 local function fastwhisper_cache(current_pos, subtitle_count)
     local temp_video_file = utils.join_path(temp_path, "whisper-" .. pid .. ".mkv")
-    local srt_file  = utils.join_path(temp_path, "whisper.srt")
-    local file_duration = mp.get_property_number('duration')
+    local srt_file = subtitles_file
+    local file_duration = mp.get_property_number('duration', math.huge)
     local cache_state = mp.get_property_native("demuxer-cache-state")
     local cache_ranges = cache_state and cache_state["seekable-ranges"] or {}
     local cache_start = cache_ranges[1] and cache_ranges[1]["start"] or current_pos
@@ -1017,7 +1103,7 @@ local function fastwhisper_cache(current_pos, subtitle_count)
     end
 
     if not valid_range or cache_end <= current_pos then
-        mp.add_timeout(1, function() fastwhisper_cache(current_pos, subtitle_count) end)
+        later(1, function() fastwhisper_cache(current_pos, subtitle_count) end)
         return
     end
 
@@ -1062,18 +1148,36 @@ local function fastwhisper_cache(current_pos, subtitle_count)
     current_pos = cache_end
 
     -- Callback
-    mp.add_timeout(1, function() fastwhisper_cache(current_pos, subtitle_count) end)
+    later(1, function() fastwhisper_cache(current_pos, subtitle_count) end)
 end
 ------------------------
 
 local function whisper()
     if whisper_running then return end
-    gpt_api_enabled = call_gpt_api("test") ~= nil and true or false
+    if selected_backend == 'qwen' then
+        if is_protocol(mp.get_property('path')) then
+            mp.osd_message('Qwen 目前支持本地媒体；网络媒体请选择 Whisper', 5); return
+        end
+        local track = mp.get_property_native('current-tracks/audio', {})
+        if track.external then mp.osd_message('Qwen 暂不支持外挂音轨，请选择内置音轨', 5); return end
+        if not file_exists(qwen_runner) or not file_exists(qwen_model .. '/config.json') or
+            not file_exists(qwen_aligner .. '/config.json') then
+            mp.osd_message('Qwen 本地依赖未配置，参见 docs/ai-subtitles.md；可切回 Whisper', 6); return
+        end
+    end
+    local entry = current_entry()
+    if not entry then mp.osd_message('请先打开媒体文件', 4); return end
+    if load_cached(entry, false) then return end
+    reset_session()
+    if not begin_work(entry) then return end
+    gpt_api_enabled = o.api_key and not o.api_key:match('^%s*$') or false
+    if selected_backend == 'qwen' then fastwhisper(); return end
     local path =  mp.get_property_native("path")
     local cache = mp.get_property_native("cache")
     local cache_state = mp.get_property_native("demuxer-cache-state")
     local cache_ranges = cache_state and cache_state["seekable-ranges"] or {}
     if path and is_protocol(path) or (cache == "auto" and #cache_ranges > 0) then
+        if #cache_ranges == 0 then mp.osd_message('当前网络媒体没有可用缓存范围', 5); return end
         time_ranges = {}
         local subtitle_count = 0
         local current_pos = mp.get_property_native("time-pos")
@@ -1089,41 +1193,47 @@ local function whisper()
     end
 end
 
-mp.add_hook("on_unload", 50, function()
-    start_index = 1
-    in_progress_batches = 0
-    translated_batches_count = 0
-    time_ranges = nil
-    progress_cache = nil
-    translated_cache = nil
-    collectgarbage()
-    time_ranges = {}
-    progress_cache = {}
-    translated_cache = {}
-
-    local temp_path = os.getenv("TEMP") or "/tmp/"
-    local path = mp.get_property("path")
-    local dir = utils.split_path(path)
-    local filename = mp.get_property("filename/no-ext")
-    local translated_file = utils.join_path(dir, filename .. ".translate.srt")
-    local files_to_remove = {
-        temp_video_file = utils.join_path(temp_path, "whisper-" .. pid .. ".mkv"),
-        segment_audio_file = utils.join_path(temp_path, "whisper-" .. pid .. ".wav"),
-        temp_srt_file1 = utils.join_path(temp_path, "whisper.srt"),
-        temp_srt_file2 = utils.join_path(temp_path, "whisper-" .. pid .. ".srt"),
-        temp_srt_file3 = utils.join_path(temp_path, "whisper.translate.srt"),
-        temp_srt_file4 = utils.join_path(temp_path, "whisper." .. o.translate .. ".ass")
-    }
-
-    for _, file in pairs(files_to_remove) do
-        if file_exists(file) then
-            os.remove(file)
-        end
+local function backend_menu()
+    local items = {}
+    for _, backend in ipairs({'whisper', 'qwen'}) do
+        items[#items + 1] = {title = backend == 'whisper' and ('Whisper ' .. o.model) or 'Qwen3-ASR 1.7B',
+            active = selected_backend == backend,
+            hint = backend == 'whisper' and '默认方案' or '本地识别 + 时间轴对齐',
+            value = {'script-message-to', 'sub_fastwhisper', 'sub-fastwhisper-backend', backend}}
     end
+    return {type = 'ai-subtitle-backend', title = 'AI 字幕识别方案', keep_open = true,
+        footnote = '选择在当前播放器内保持；Alt+f 生成或复用对应缓存', items = items}
+end
 
-    check_and_remove_empty_file(subtitles_file)
-    check_and_remove_empty_file(translated_file)
-end)
+local function select_backend(backend)
+    if backend ~= 'whisper' and backend ~= 'qwen' then msg.error('Unknown ASR backend'); return end
+    if selected_backend ~= backend then
+        reset_session()
+        -- Remove only tracks from our cache, preserving externally provided subtitles.
+        local prefix = normalize(cache_root):gsub('\\', '/'):lower():gsub('/+$', '') .. '/'
+        for _, track in ipairs(mp.get_property_native('track-list', {})) do
+            local path = track['external-filename']
+            if track.type == 'sub' and path and normalize(path):gsub('\\', '/'):lower():sub(1, #prefix) == prefix then
+                mp.commandv('sub-remove', track.id)
+            end
+        end
+        selected_backend = backend
+        mp.set_property_native('user-data/ai-subtitles/backend', selected_backend)
+        if mp.get_property('path') then load_cached(current_entry(), true) end
+    end
+    mp.osd_message('AI 字幕方案：' .. (selected_backend == 'qwen' and 'Qwen3-ASR 1.7B' or ('Whisper ' .. o.model)), 4)
+    if mp.get_property_native('user-data/uosc/menu/type') == 'ai-subtitle-backend' then
+        mp.commandv('script-message-to', 'uosc', 'update-menu', utils.format_json(backend_menu()))
+    end
+end
+
+mp.add_hook('on_unload', 50, reset_session)
+mp.register_event('file-loaded', function() load_cached(current_entry(), true) end)
 
 mp.register_script_message("sub-translate", translate_srt_file)
 mp.register_script_message("sub-fastwhisper", whisper)
+mp.register_script_message('sub-fastwhisper-cancel', reset_session)
+mp.register_script_message('sub-fastwhisper-backend', select_backend)
+mp.register_script_message('sub-fastwhisper-backend-menu', function()
+    mp.commandv('script-message-to', 'uosc', 'open-menu', utils.format_json(backend_menu()))
+end)

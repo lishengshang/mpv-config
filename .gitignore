@@ -13,3 +13,7 @@ __pycache__/
 scripts/webtorrent.js
 
 .zcode/
+.workbuddy/
+.trae/
+.codex/
+.claude/

@@ -18,6 +18,11 @@
 # 约 1.4GB，解压后约 2.5GB；首次运行还会下载 Whisper 模型约 1.6GB。最新的 XXL Pro r3.256.1 是收费闭源版，别用）
 #script-opts-append=sub_fastwhisper-fast_whisper_path=C:\path\to\faster-whisper-xxl.exe
 
+# Qwen3-ASR 备选：独立 Python 3.12 环境和本地模型；不复用 VS Python。
+#script-opts-append=sub_fastwhisper-qwen_python=C:/path/to/qwen-asr/.venv/Scripts/python.exe
+#script-opts-append=sub_fastwhisper-qwen_model=C:/path/to/qwen-asr/models/Qwen3-ASR-1.7B
+#script-opts-append=sub_fastwhisper-qwen_aligner=C:/path/to/qwen-asr/models/Qwen3-ForcedAligner-0.6B
+
 # alass 可执行文件，autosubsync.lua 的字幕同步后端。
 # 默认值 alass_path=alass 是裸名，靠 mpv.exe 同目录或 PATH 解析，通常无需在此设置。
 #script-opts-append=autosubsync-alass_path=C:\path\to\alass.exe
