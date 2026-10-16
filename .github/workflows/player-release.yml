@@ -70,7 +70,7 @@ jobs:
           path: cache
       - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
         with:
-          msystem: MINGW64
+          msystem: UCRT64
           update: true
           install: git make
           pacboy: >-

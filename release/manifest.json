@@ -3,6 +3,7 @@
   "repository": "lishengshang/mpv-config",
   "revision": 1,
   "mpv_repository": "mpv-player/mpv",
+  "msys2_environment": "UCRT64",
   "vapoursynth_headers_commit": "e46204429041e95a881b61eedddd46c08f9a307c",
   "luasocket_commit": "95b7efa9da506ef968c1347edf3fc56370f0deed",
   "required_filters": ["vapoursynth", "d3d11vpp"],

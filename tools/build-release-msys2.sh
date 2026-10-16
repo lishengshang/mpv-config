@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Run only inside the CI MINGW64 environment; no system setup on the owner's PC.
+# Run only inside the CI UCRT64 environment; no system setup on the owner's PC.
 set -euo pipefail
 plan=$(cygpath -u "$1")
 work=$(cygpath -u "$2")
 mkdir -p "$work"
 work=$(cd "$work" && pwd)
-test "$MSYSTEM" = MINGW64
+test "$MSYSTEM" = UCRT64
 python - "$plan" <<'PY'
 import sys
 sys.path.insert(0, 'tools')
