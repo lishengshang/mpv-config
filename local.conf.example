@@ -30,3 +30,8 @@
 # assrt.net 字幕搜索 API token，sub-assrt.lua 使用。脚本内预设的是上游作者的 key，
 # 建议到 https://assrt.net 注册自己的，避免依赖别人的配额而随时失效。
 #script-opts-append=sub_assrt-api_token=你的token
+
+# HDRTray 的 HDRCmd.exe，toggleHDR.lua 用它切换 Windows HDR 显示模式。
+# 下载:https://github.com/res2k/HDRTray/releases （解压后取 HDRCmd.exe 即可，无需常驻托盘程序）
+# 未配置此项时 toggleHDR 不接管 HDR，也不告警；切换可能需要以管理员身份运行 mpv。
+#script-opts-append=toggleHDR-hdr_cmd_path=C:\path\to\HDRTray\HDRCmd.exe

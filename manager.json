@@ -115,5 +115,23 @@
     "branch":"main",
     "whitelist":"%.lua$|%.md$|LICENSE$",
     "dest":"~~/scripts/uosc_danmaku"
+  },
+  {
+    "git":"https://github.com/yosh-wang/mpv-hdr-auto-toggle",
+    "branch":"main",
+    "whitelist":"togglehdr%.lua$",
+    "dest":"~~/scripts"
+  },
+  {
+    "git":"https://github.com/yosh-wang/mpv-hdr-auto-toggle",
+    "branch":"main",
+    "whitelist":"togglehdr%.conf$",
+    "dest":"~~/script-opts"
+  },
+  {
+    "git":"https://github.com/yosh-wang/auto_bluray-ISO-",
+    "branch":"main",
+    "whitelist":"auto_bluray%.lua$",
+    "dest":"~~/scripts"
   }
 ]
