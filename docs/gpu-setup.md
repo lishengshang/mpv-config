@@ -80,7 +80,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/export-vs-addon.ps1
 ..\python.exe tools/test_gpu_ux.py --case failure
 ```
 
-播放测试只加载 uosc、GPU 脚本和输入绑定，日志/截图在 `cache/gpu-ux/`；默认 1280×720/30fps，不覆盖全部日常脚本。640×360 暂停长序列的已知失败和当前未提交验收见 [项目状态](../PROJECT_STATE.md)。
+播放测试只加载 uosc、GPU 脚本和输入绑定，日志/截图在 `cache/gpu-ux/`；默认 1280×720/30fps，不覆盖全部日常脚本。小尺寸暂停切换回归：`python tools/test_gpu_ux.py --case playback --paused --source-width 640 --focused`；覆盖 RIFE、DRBA、两种 ArtCNN、MIX、用户滤镜保留与下一文件，不等待 shader 编译。去掉 `--paused` 比较普通播放。原全序列仍可执行，但首次 shader 编译可能远超普通切换耗时。
 
 导出产物在 `cache/packages/`：基础配置 ZIP、`mpv-VS-RTX-addon.7z` 与 SHA256。需要 Git/7-Zip；配置排除私人文件/缓存，VS 包不含配置和引擎缓存。它是本机组件快照，使用前核对附带 SHA256 与上游许可；旧包不自动包含后续代码修改。
 
@@ -93,6 +93,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/export-vs-addon.ps1
 `vf add` 返回成功及 `video-reconfig` 都可能早于实际 VS 初始化；脚本等待明确完成日志后才确认应用，之后监听错误。不同 mpv 版本缺少完成信号会超时回滚。shader “已选择”仅表示列表设置成功，实际渲染以画面/自检为准。
 
 ## 历史验证边界
+
+2026-10-16 小尺寸修复验收：RTX 4070 Laptop 8GB、既有运行时；普通 ArtCNN、Chroma、MIX 在 640×360 与 1280×720 各实际输出三张 PNG（`cache/gpu-check/20261016-152239-933577/` 至 `20261016-152247-552142/` 的六份报告）。RIFE → DRBA → ArtCNN → Chroma → MIX 的重置/用户滤镜保留/下一文件回归通过：640×360 暂停 `cache/gpu-ux/20261016-151908-playback-paused-focused-640/`、普通播放 `20261016-152249-playback-focused-640/`、1280×720 暂停 `20261016-152308-playback-paused-focused-1280/`。这些不等同长时稳定性或实时速度测试。
+
+原 2026-10-14 长序列被误记为 DRBA 失败；原日志显示 DRBA 已初始化并截图，真正形状错误在后续普通 ArtCNN。小于动态引擎最小形状时现使用静态引擎，见 VS 说明。本次原全序列停在 shader 首次编译，已停止，未计通过；shader 冷编译完整长序列仍未重新验收。
 
 继承 2026-10-14 的记录，提交 `3bc9548`、`fb42716`：RTX 4070 Laptop 8188MiB、驱动 616.92、mpv `v0.41.0-1017-g02a595ddc`、Python 3.14.4、VS R73、k7sfunc 1.8.1。
 

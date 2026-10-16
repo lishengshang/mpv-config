@@ -40,15 +40,16 @@ Lk_Fmt = False
 def trt_backend() :
     return vsmlrt.BackendV2.TRT(
         num_streams=Gpu_T, force_fp16=True, output_format=1,
-        workspace=None if Ws_Size < 128 else (Ws_Size if St_Eng else Ws_Size * 2),
+        workspace=None if Ws_Size < 128 else (Ws_Size if effective_static else Ws_Size * 2),
         use_cuda_graph=True, use_cublas=False, use_cudnn=False,
-        static_shape=St_Eng, min_shapes=[0, 0] if St_Eng else [384, 384],
-        opt_shapes=None if St_Eng else ([1920, 1080] if Lt_Hd else [1280, 720]),
-        max_shapes=None if St_Eng else ([2048, 1080] if Lt_Hd else [1280, 720]),
+        static_shape=effective_static, min_shapes=[0, 0] if effective_static else [384, 384],
+        opt_shapes=None if effective_static else ([1920, 1080] if Lt_Hd else [1280, 720]),
+        max_shapes=None if effective_static else ([2048, 1080] if Lt_Hd else [1280, 720]),
         device_id=Gpu, short_path=True)
 
 ret = k7f.FMT_CTRL(clip, h_max=1200, h_ret=True)
 clip = k7f.FMT_CTRL(clip, h_max=H_Pre, fmt_pix=1 if Lk_Fmt else 0)
+effective_static = St_Eng or clip.width < 384 or clip.height < 384
 
 fmt_in = clip.format.id
 cut0 = core.resize.Bilinear(clip=clip, format=vs.YUV444PH)

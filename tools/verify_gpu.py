@@ -39,7 +39,7 @@ def evaluate(returncode, log, frames, timed_out=False, required=3):
     return True, f'{len(frames)} real PNG frames'
 
 
-def run_check(mpv, path, kind, folder, timeout):
+def run_check(mpv, path, kind, folder, timeout, source_width=1280):
     folder.mkdir(parents=True)
     log_path = folder / 'mpv.log'
     args = [str(mpv), '--no-config', '--load-scripts=no', '--audio=no', '--hwdec=no',
@@ -48,7 +48,7 @@ def run_check(mpv, path, kind, folder, timeout):
     if kind == 'vs':
         args += ['--vo=image', '--vo-image-format=png', '--vo-image-outdir=' + str(folder),
                  '--vf=vapoursynth=file="' + path.as_posix() + '"']
-        source = 'av://lavfi:testsrc2=size=1280x720:rate=30,format=yuv420p'
+        source = f'av://lavfi:testsrc2=size={source_width}x{source_width * 9 // 16}:rate=30,format=yuv420p'
     else:
         # image VO bypasses GLSL. Capture the actual gpu-next window at 2x size.
         lua = folder / 'capture.lua'
@@ -103,6 +103,8 @@ def main():
     parser.add_argument('--kind', choices=['vs', 'shader', 'all'], default='all')
     parser.add_argument('--preset', help='Exact stem, e.g. NR_BILATERAL_CUDA')
     parser.add_argument('--timeout', type=int, default=300)
+    parser.add_argument('--source-width', type=int, choices=[640, 1280], default=1280,
+                        help='VS input size; 640 exercises inputs below dynamic TRT minimum shapes')
     options = parser.parse_args()
     if options.timeout < 1:
         parser.error('--timeout must be positive')
@@ -152,7 +154,7 @@ def main():
     for path, kind in paths:
         if options.run:
             try:
-                result = run_check(mpv, path, kind, folder / path.stem, options.timeout)
+                result = run_check(mpv, path, kind, folder / path.stem, options.timeout, options.source_width)
             except OSError as exc:
                 result = dict(preset=path.stem, kind=kind, passed=False, reason=str(exc))
             report['results'].append(result)

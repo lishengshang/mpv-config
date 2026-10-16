@@ -35,7 +35,9 @@ Gpu_T = 2             # 显卡线程数
 # 超分：仅对720p及以下的源进行2x放大
 if clip.height <= 720:
     clip = k7f.FMT_CTRL(clip, h_max=H_Pre, fmt_pix=1)
-    clip = k7f.ARTCNN_NV(clip, lt_hd=False, model=SR_Model, gpu=Gpu, gpu_t=Gpu_T, st_eng=False, ws_size=0)
+    # Dynamic ArtCNN engines start at 384 pixels on each axis.
+    effective_static = clip.width < 384 or clip.height < 384
+    clip = k7f.ARTCNN_NV(clip, lt_hd=False, model=SR_Model, gpu=Gpu, gpu_t=Gpu_T, st_eng=effective_static, ws_size=0)
     clip = k7f.FMT_CTRL(clip, h_max=H_SR_Max)
 
 # 补帧：RIFE轻量模型，仅对≤32fps的源补帧

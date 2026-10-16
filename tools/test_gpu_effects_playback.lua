@@ -1,6 +1,6 @@
 -- Actual command routing, video output and next-file regression.
 local utils = require 'mp.utils'
-local o = {no_vs = false, failure = false, all_rtx = false, output = '~~/cache/ux-playback'}
+local o = {no_vs = false, failure = false, all_rtx = false, focused = false, output = '~~/cache/ux-playback'}
 require('mp.options').read_options(o, 'ux-test')
 local phase, step = 0, 0
 local function status() return mp.get_property_native('user-data/gpu-effects', {}) end
@@ -81,6 +81,24 @@ else
     end
     add(function() mp.commandv('keypress', '!') end, function() return active('NR_BILATERAL_CUDA') end)
 end
+if o.focused then
+    steps = {}
+    add(function() send('menu') end, function() return mp.get_property_native('user-data/uosc/menu/type') == 'gpu-effects' end)
+    add(function()
+        shot('menu', 'window'); mp.commandv('script-message-to', 'uosc', 'close-menu', 'gpu-effects')
+        mp.commandv('vf', 'add', '@ux-user:hflip')
+    end, function() return #mp.get_property_native('vf', {}) == 1 end)
+    for _, id in ipairs({'MEMC_RIFE_TRT', 'MEMC_DRBA_TRT', 'SR_ARTCNN_TRT', 'SR_ARTCNN_CHROMA_TRT', 'MIX_SR_MEMC_TRT'}) do
+        local current = id
+        add(function() send('toggle', current) end, function() return active(current) end)
+        add(function()
+            check(#mp.get_property_native('vf', {}) == 2, 'one managed filter plus user filter')
+            shot(current); send('reset')
+        end, function() return active('') and #mp.get_property_native('vf', {}) == 1 end)
+    end
+    add(function() send('toggle', 'MEMC_DRBA_TRT') end, function() return active('MEMC_DRBA_TRT') end)
+    add(function() mp.commandv('vf', 'remove', '@ux-user') end, function() return #mp.get_property_native('vf', {}) == 1 end)
+end
 local function next_step()
     step = step + 1
     if not steps[step] then
@@ -99,7 +117,9 @@ local function next_step()
             mp.msg.info('GPU UX STEP PASS: ' .. step)
             -- Let the new filter render before screenshotting on the next step.
             mp.add_timeout(0.7, next_step)
-        elseif mp.get_time() - started > 120 then
+        elseif not o.failure and status().pending == '' and (status().message or ''):find('初始化失败', 1, true) then
+            poll:kill(); failure('step ' .. step .. ': ' .. utils.format_json(status()))
+        elseif mp.get_time() - started > (status().pending ~= '' and 320 or 120) then
             poll:kill(); failure('step ' .. step .. ' timed out: ' .. utils.format_json(status()))
         end
     end)
@@ -115,7 +135,7 @@ mp.register_event('file-loaded', function()
                 shot(phase == 2 and 'next-file' or 'shader-next-file')
             end)
             if not ok then failure(err); return end
-            if phase == 2 then
+            if phase == 2 and not o.focused then
                 send('toggle', 'ArtCNN_C4F16')
                 local began = mp.get_time()
                 local poll

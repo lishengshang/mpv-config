@@ -33,7 +33,10 @@ Lk_Fmt = False
 
 ret = k7f.FMT_CTRL(clip, h_max=1200, h_ret=True)
 clip = k7f.FMT_CTRL(clip, h_max=H_Pre, fmt_pix=1 if Lk_Fmt else 0)
-clip = k7f.ARTCNN_NV(clip, lt_hd=Lt_Hd, model=Model, gpu=Gpu, gpu_t=Gpu_T, st_eng=St_Eng, ws_size=Ws_Size)
+# k7sfunc's dynamic ArtCNN engine uses min_shapes=[384, 384].
+# Use an exact-shape engine below that floor without changing model or output size.
+effective_static = St_Eng or clip.width < 384 or clip.height < 384
+clip = k7f.ARTCNN_NV(clip, lt_hd=Lt_Hd, model=Model, gpu=Gpu, gpu_t=Gpu_T, st_eng=effective_static, ws_size=Ws_Size)
 clip = k7f.FMT_CTRL(clip, h_max=H_Max, fmt_pix=1 if Lk_Fmt else 0)
 
 clip.set_output()

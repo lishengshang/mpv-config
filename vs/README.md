@@ -47,4 +47,5 @@ TRT/DML 对照共用模型；倍率是模型倍率，实际尺寸受 `H_Pre` / `
 - `NR_BM3D_CUDA` 调用的函数名虽为 `BM3D_NV`，实际插件是 `bm3dcuda_rtc`；文件后缀按后端命名。
 - Chroma 预设直接调 `vsmlrt.ArtCNN`，因为 k7sfunc 1.8.1 的 `ARTCNN_NV` 仅接受 6/7/8；4:2:0 BT.709 色度先 bilinear 放大，不在更新时改回普通 ArtCNN 调用。
 - 首次 TRT 构建及换尺寸/模型可能较慢；缺模型、DLL 不匹配和驱动不足均需实际产帧检查，不能只看导入成功。
-- 驱动/运行时更新后执行 `tools/verify-gpu.ps1 -Run`；仓库外旧检查批处理仅作辅助。已知 DRBA 暂停长序列问题见 [项目状态](../PROJECT_STATE.md)。
+- ArtCNN 普通、Chroma 与 MIX 预设在格式预处理后任一边小于 384 像素时使用静态 TRT 引擎，绕开 k7sfunc 1.8.1 动态引擎的 `min_shapes=[384,384]`。模型、缩放和个人参数不变；首次遇到小尺寸可能新建引擎，符合范围的源仍按原设置运行。
+- 驱动/运行时更新后执行 `tools/verify-gpu.ps1 -Run`；小尺寸产帧检查加 `-SourceWidth 640`。仓库外旧检查批处理仅作辅助。

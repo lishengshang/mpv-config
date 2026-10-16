@@ -4,6 +4,7 @@ param(
     [ValidateSet('vs', 'shader', 'all')][string]$Kind = 'all',
     [string]$Preset = '',
     [int]$Timeout = 300,
+    [ValidateSet(640, 1280)][int]$SourceWidth = 1280,
     [string]$MpvRoot = ''
 )
 $ErrorActionPreference = 'Stop'
@@ -15,7 +16,7 @@ if (!(Test-Path -LiteralPath $python)) {
     exit 2
 }
 $taskArgs = @((Join-Path $PSScriptRoot 'verify_gpu.py'), '--mpv-root', $MpvRoot,
-              '--kind', $Kind, '--timeout', $Timeout)
+              '--kind', $Kind, '--timeout', $Timeout, '--source-width', $SourceWidth)
 if ($Run) { $taskArgs += '--run' }
 if ($Preset) { $taskArgs += @('--preset', $Preset) }
 & $python @taskArgs
