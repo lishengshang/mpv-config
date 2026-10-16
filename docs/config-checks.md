@@ -57,7 +57,7 @@ Windows 构建参考 mpv 自身 MSYS2 CI，采用仍提供 mujs/rubberband 的 U
 
 流水线先跑离线回归，再构建与收集原生 DLL 依赖，随后执行配置原生解析和全脚本 CPU 播放检查：实际加载两个本地媒体、切换下一文件、恢复速度。使用精简 PATH、移除 Lua/Python/mpv 环境覆盖，从无关工作目录启动；缺能力、进程非零、日志缺失、错误级日志或缺成功标记均失败。检查后的文件摘要必须与归档前一致；最终 ZIP 再解压到含中文和空格的新位置复测，校验匹配才可发布。它不覆盖 D3D11 渲染、GPU 产帧、AI 推理或真实片源性能。
 
-从 r2 起额外检查 `secondary-sub-scale`，并对组装后的播放器执行全菜单回归：`tools/test_menu_ui.py --full --software-renderer`。CI 用 D3D11 WARP 软件渲染和无增强 shader 的测试条件，提供菜单、次字幕字号、切片/重置及截图证据；不改变发行包默认画质。通过报告绑定播放器 SHA256，缺少或不匹配的 `menu-report.json` 不得发布。WARP 不替代 NVIDIA 实际渲染、VS 产帧和 AI 验收。r1 曾只通过 CPU 检查，缺少次字幕字号支持，已在该预发布说明中标为已知问题，不得晋级正式版。
+从 r2 起额外检查 `secondary-sub-scale`，并对组装后的播放器执行全菜单回归：`tools/test_menu_ui.py --full --software-renderer --local-media`。CI 用本地 H.264/AAC 合成片段、D3D11 WARP 软件渲染和无增强 shader 的测试条件，提供菜单、次字幕字号、切片/重置及截图证据；不改变发行包默认画质。通过报告绑定播放器 SHA256，缺少或不匹配的 `menu-report.json` 不得发布。断言通过但进程退出异常仍失败；保留崩溃事件及 `unverified-player` 供诊断，不将其发布为候选。WARP 不替代 NVIDIA 实际渲染、VS 产帧和 AI 验收。r1 曾只通过 CPU 检查，缺少次字幕字号支持，已在该预发布说明中标为已知问题，不得晋级正式版。
 
 本机只读检查上游（有未提交修改时生成不能构建/发布的审计计划）：
 

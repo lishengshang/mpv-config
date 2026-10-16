@@ -3,6 +3,7 @@ import json
 import argparse
 import hashlib
 import re
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -16,6 +17,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--full', action='store_true', help='Load the real config and all daily scripts; isolate history and network danmaku')
     parser.add_argument('--software-renderer', action='store_true', help='Use D3D11 WARP without enhancement shaders for CI menu checks')
+    parser.add_argument('--local-media', action='store_true', help='Generate a local H.264/AAC fixture with the bundled FFmpeg')
     parser.add_argument('--input-conf', type=Path, default=ROOT / 'input.conf', help='Validate an alternate input configuration, such as the staged snapshot')
     options = parser.parse_args()
     folder = ROOT / 'cache/menu-rework' / (datetime.now().strftime('%Y%m%d-%H%M%S') + ('-full' if options.full else ''))
@@ -23,6 +25,19 @@ def main():
     for filename, text in [('one.srt', '测试主字幕'), ('two.srt', '测试次字幕')]:
         (folder / filename).write_text(f'1\n00:00:00,000 --> 00:10:00,000\n{text}\n', encoding='utf-8')
     source = 'av://lavfi:testsrc2=size=640x360:rate=30[out0];sine=frequency=440:sample_rate=48000[out1]'
+    if options.local_media:
+        ffmpeg = ROOT.parent / 'ffmpeg.exe'
+        if not ffmpeg.is_file():
+            ffmpeg = shutil.which('ffmpeg')
+        if not ffmpeg:
+            raise SystemExit('FFmpeg required for the local media fixture')
+        media = folder / 'media' / 'sample.mkv'
+        media.parent.mkdir()
+        subprocess.run([str(ffmpeg), '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i',
+                        'testsrc2=size=640x360:rate=30', '-f', 'lavfi', '-i',
+                        'sine=frequency=440:sample_rate=48000', '-t', '20', '-c:v', 'libx264',
+                        '-preset', 'ultrafast', '-c:a', 'aac', str(media)], check=True, timeout=60)
+        source = str(media)
     scripts = ['scripts/uosc', 'scripts/menu-ui.lua', 'scripts/dyn_menu.lua', 'scripts/inputevent.lua',
                'scripts/gpu-effects.lua', 'scripts/quality-menu.lua', 'tools/test_menu_ui_playback.lua']
     if options.full:
@@ -56,6 +71,7 @@ def main():
     log = (folder / 'player.log').read_text(encoding='utf-8', errors='replace') if (folder / 'player.log').is_file() else ''
     report['exit_code'], report['timed_out'] = code, timed_out
     report['renderer'] = 'd3d11-warp' if options.software_renderer else 'd3d11-auto'
+    report['media'] = 'local-h264-aac' if options.local_media else 'lavfi-device'
     report['player_sha256'] = hashlib.sha256((ROOT.parent / 'mpv.exe').read_bytes()).hexdigest()
     report['fatal_errors'] = [line for line in log.splitlines() if re.match(r'^\[.*?\]\[f\]\[', line)]
     report['runtime_errors'] = [line for line in log.splitlines() if re.match(r'^\[.*?\]\[e\]\[', line)]
