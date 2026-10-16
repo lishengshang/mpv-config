@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "repository": "lishengshang/mpv-config",
+  "revision": 1,
+  "mpv_repository": "mpv-player/mpv",
+  "vapoursynth_headers_commit": "e46204429041e95a881b61eedddd46c08f9a307c",
+  "luasocket_commit": "95b7efa9da506ef968c1347edf3fc56370f0deed",
+  "required_filters": ["vapoursynth", "d3d11vpp"],
+  "required_outputs": ["gpu-next"],
+  "components": [],
+  "pending_components": [
+    "VS RTX runtime/plugins/models: package and validate against the stable player",
+    "Whisper runtime/model: package and validate relocation and offline inference",
+    "Qwen runtime/models: replace non-portable venv and validate offline inference"
+  ]
+}

@@ -1,0 +1,141 @@
+name: Official mpv prerelease
+
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+    inputs:
+      mpv_tag:
+        description: 'Official stable tag (blank selects newest stable release)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: official-mpv-prerelease
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      needed: ${{ steps.plan.outputs.needed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Validate release tooling and project
+        run: |
+          python tools/test_release.py
+          python tools/check_config.py
+          python tools/test_check_config.py ReferenceChecks WiringChecks
+          python tools/test_qwen_asr.py
+          python tools/test_gpu_probe.py
+          python tools/test_verify_gpu.py
+      - name: Resolve official stable tag and exact source commits
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MPV_TAG: ${{ inputs.mpv_tag }}
+        run: python tools/release.py plan --mpv-tag "$MPV_TAG" --output cache/release-plan.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.plan.outputs.needed == 'true'
+        with:
+          name: release-plan
+          path: cache/release-plan.json
+          if-no-files-found: error
+          retention-days: 7
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.needed == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-plan
+          path: cache
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: git make
+          pacboy: >-
+            cc:p ffmpeg:p libplacebo:p libass:p lcms2:p libarchive:p
+            libbluray:p libdvdnav:p lua51:p mujs:p meson:p ninja:p pkgconf:p
+            python:p rubberband:p shaderc:p spirv-cross:p uchardet:p vulkan-devel:p
+      - name: Build official source with required features
+        shell: msys2 {0}
+        run: bash tools/build-release-msys2.sh cache/release-plan.json cache/release-build
+      - name: Stage immutable configuration and native runtime
+        shell: pwsh
+        run: python tools/release.py stage --plan cache/release-plan.json --runtime cache/release-build/runtime --output cache/release-stage
+      - name: Test Lua controllers with the built player
+        shell: pwsh
+        run: |
+          python tools/test_ai_subtitles_mock.py --mpv cache/release-build/runtime/mpv.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./cache/release-build/runtime/mpv.com --no-config --load-scripts=no --script=tools/test_gpu_effects.lua --idle=yes --vo=null --ao=null --osc=no
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify isolated playback, all scripts, next file and reset
+        shell: pwsh
+        run: python tools/release.py check --player cache/release-stage/MPV --evidence cache/release-evidence
+      - name: Archive verified candidate
+        shell: pwsh
+        run: python tools/release.py archive --player cache/release-stage/MPV --report cache/release-evidence/report.json --output cache/release-assets
+      - name: Re-extract final ZIP to a different path and verify playback
+        shell: pwsh
+        run: python tools/release.py check-archive --assets cache/release-assets --evidence cache/release-archive-evidence
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-assets
+          path: cache/release-assets/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Keep build and runtime evidence on failure
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: failure()
+        with:
+          name: release-failure-evidence
+          path: |
+            cache/release-evidence/
+            cache/release-archive-evidence/
+            cache/release-build/mpv-build/meson-logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  prerelease:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-assets
+          path: cache/release-assets
+      - name: Publish prerelease after successful checks (never latest/stable)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/release.py publish --assets cache/release-assets

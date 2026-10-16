@@ -43,6 +43,35 @@ CI 运行配置接线、字幕适配、GPU 依赖探针和验收工具失败判�
 
 实现依据：[mpv 输入绑定](https://mpv.io/manual/master/#property-list-input-bindings)、[脚本入口](https://mpv.io/manual/master/#script-location)、[命名绑定实现](https://github.com/mpv-player/mpv/blob/master/player/lua/defaults.lua)。
 
+## 正式版跟随与预发布
+
+发布策略为“官方正式 tag → 本项目 Windows 构建 → 自动预发布 → GPU/字幕验收 → 人工转正式版”。不跟随 `git-release`、RC 或每日构建，不自动替换用户正在使用的播放器。
+
+`.github/workflows/player-release.yml` 在默认分支每天 UTC 03:23（北京时间 11:23）检查上游，也可手动指定 `mpv_tag`。定时与手动入口需要 workflow 已进入远端默认分支；当前仓库为 `dev`。使用 GitHub 自带的 `GITHUB_TOKEN`；仅发布 job 获得 `contents: write`，构建 job 不持有发布权限。
+
+`release/manifest.json` 管理配置修订、构建依赖提交和必需能力。版本名为 `player-v0.41.0-r1`：mpv 官方 tag 与本项目配置修订独立；同一个 mpv 版本下发布配置修复时增加 `revision`。已公开的资产拒绝覆盖，上传失败只留下草稿，同源重跑可补齐草稿。预发布始终 `latest=false`，正式用户继续使用已验收版本。
+
+Windows 构建参考 mpv 自身 MSYS2 CI，固定 mpv tag 解析后的源码提交，显式启用 Lua、JavaScript、D3D11、VapourSynth 等；VS 只安装固定提交的头文件，实际 Python/VS 运行时另行分发。LuaSocket 从固定提交构建并与播放器共用 Lua 5.1，WebUI 从播放器目录解析模块，不依赖进程当前目录。依赖的 MSYS2 二进制包在构建时解析，版本记录于包内 `msys2-packages.txt`；这不是所有依赖完全锁定的逐字节可复现构建。
+
+流水线先跑离线回归，再构建与收集原生 DLL 依赖，随后执行配置原生解析和全脚本 CPU 播放检查：实际加载两个本地媒体、切换下一文件、恢复速度。使用精简 PATH、移除 Lua/Python/mpv 环境覆盖，从无关工作目录启动；缺能力、进程非零、日志缺失、错误级日志或缺成功标记均失败。检查后的文件摘要必须与归档前一致；最终 ZIP 再解压到含中文和空格的新位置复测，校验匹配才可发布。它不覆盖 D3D11 渲染、GPU 产帧、AI 推理或真实片源性能。
+
+本机只读检查上游（有未提交修改时生成不能构建/发布的审计计划）：
+
+```powershell
+python tools/release.py plan --allow-dirty --output cache/release-audit/plan.json
+python tools/test_release.py
+```
+
+干净且已提交的源码可去掉 `--allow-dirty`。`stage`、`check`、`archive`、`check-archive`、`publish` 的完整参数见各自 `--help`；编译脚本 `tools/build-release-msys2.sh` 只在 CI 的 MINGW64 环境执行，不在日常播放器目录安装编译器。`publish` 是实际远端写入命令，日常自检不调用。
+
+首个候选仍是播放器及配置，`components` 目录清单尚未填入已验收的分包；`pending_components` 明确列出 VS、Whisper、Qwen 的待办。不能称为离线完整版，也不能把本机 `.venv` 直接塞入包。后续组件用独立固定版本/哈希/兼容范围，不随每次 mpv 更新重复上传模型；完整离线包须在组件全部通过后组装。
+
+转正式版前，使用最终下载的候选包和选定组件完成启动/媒体/菜单/切片/重置、每个提供的 VS 预设产帧及 shader 渲染、Whisper/Qwen 真实字幕/缓存/取消、路径迁移和干净机器验收。把硬件、版本、组件和未覆盖项记入 Release 说明，保留原始证据；之后在 GitHub 编辑该预发布，取消 Pre-release 并设置 Latest。流程不自动做此晋级。
+
+2026-10-16 来源核对：官方 `v0.41.0` Windows MinGW 包可以通过本项目原生命令解析，但 `--vf=help` 没有 `vapoursynth`，不能作为当前全功能版的直接替换；外层 ZIP 还含一个内层 ZIP。构建结果以对应 Actions 运行及 Release 附件为准；本地脚本或离线回归通过不等于正式源码构建已通过。
+
+依据：[mpv 正式发布](https://github.com/mpv-player/mpv/releases)、[官方 MSYS2 CI](https://github.com/mpv-player/mpv/blob/v0.41.0/ci/build-msys2.sh)、[GitHub 定时事件](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)。
+
 ## 菜单与设置保留回归
 
 `python tools/test_menu_ui.py --full` 加载日常脚本，经真实导航/回车检查菜单、状态、切片与恢复；隔离历史及 IPC，禁用测试网络弹幕。进程失败、错误级日志、缺少报告或截图均判失败。

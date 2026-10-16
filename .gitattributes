@@ -1,3 +1,4 @@
+.gitattributes text eol=lf
 *.conf      linguist-language=INI
 *.hook      linguist-language=GLSL
 *.conf      text eol=lf
@@ -13,5 +14,6 @@
 *.vpy       text eol=lf
 *.ps1       text eol=lf
 *.cmd       text eol=lf
+*.sh        text eol=lf
 *.yml       text eol=lf
 *.yaml      text eol=lf
