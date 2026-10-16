@@ -13,8 +13,8 @@ from release import load_plan
 load_plan(sys.argv[1])
 PY
 
-read_field() { python -c 'import json,sys; x=json.load(open(sys.argv[1])); print(x[sys.argv[2]])' "$plan" "$1"; }
-read_build_field() { python -c 'import json,sys; x=json.load(open(sys.argv[1])); print(x["build"][sys.argv[2]])' "$plan" "$1"; }
+read_field() { python -c 'import json,sys; x=json.load(open(sys.argv[1])); print(x[sys.argv[2]])' "$plan" "$1" | tr -d '\r'; }
+read_build_field() { python -c 'import json,sys; x=json.load(open(sys.argv[1])); print(x["build"][sys.argv[2]])' "$plan" "$1" | tr -d '\r'; }
 checkout_source() {
     local repository=$1 commit=$2 directory=$3
     [[ $commit =~ ^[0-9a-f]{40}$ ]]
@@ -31,19 +31,24 @@ checkout_source lunarmodules/luasocket "$(read_build_field luasocket_commit)" "$
 
 # Stable 0.41 links VSScript directly. Backport the pinned upstream dynamic-loader
 # fixes only to the explicitly listed release; newer tags use their own source.
+python - "$plan" "$work/backports.txt" <<'PY'
+from pathlib import Path
+import sys
+sys.path.insert(0, 'tools')
+from release import load_plan, selected_backports
+Path(sys.argv[2]).write_text(''.join(commit + '\n' for commit in selected_backports(load_plan(sys.argv[1]))),
+                           encoding='utf-8', newline='\n')
+PY
 while IFS= read -r backport; do
-    [[ $backport =~ ^[0-9a-f]{40}$ ]]
+    backport=${backport%$'\r'}
+    [[ -n $backport ]] || continue
+    [[ $backport =~ ^[0-9a-f]{40}$ ]] || { printf 'Invalid backport: %q\n' "$backport" >&2; exit 1; }
+    printf 'Applying upstream backport: %s\n' "$backport"
     git -C "$work/mpv-source" fetch --depth=2 origin "$backport"
     git -C "$work/mpv-source" diff "$backport^" "$backport" > "$work/$backport.patch"
     git -C "$work/mpv-source" apply --check "$work/$backport.patch"
     git -C "$work/mpv-source" apply "$work/$backport.patch"
-done < <(python - "$plan" <<'PY'
-import sys
-sys.path.insert(0, 'tools')
-from release import load_plan, selected_backports
-sys.stdout.write(''.join(commit + '\n' for commit in selected_backports(load_plan(sys.argv[1]))))
-PY
-)
+done < "$work/backports.txt"
 
 # The patched Windows interface loads VSScript.dll only when the filter starts.
 mkdir -p "$work/pkgconfig"
