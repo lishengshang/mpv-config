@@ -1,6 +1,6 @@
 -- Real mpv routing, subtitle loading, next-file, reset and persistent reuse.
 local utils = require 'mp.utils'
-local o = {root = '', first = '', second = '', timeout = 180, menu_switch = false}
+local o = {root = '', first = '', second = '', timeout = 180, menu_switch = false, management = false}
 require('mp.options').read_options(o, 'asr-playback')
 package.path = mp.command_native({'expand-path', '~~/script-modules/?.lua'}) .. ';' .. package.path
 local cache = require 'ai-subtitle-cache'
@@ -105,11 +105,39 @@ mp.add_periodic_timer(0.15, function()
             check(reset_done(), 'existing subtitle reset shortcut')
             clean_media_folder(o.first)
             clean_media_folder(o.second)
+            if o.management then
+                phase, previous = 70, mp.get_time()
+                mp.commandv('script-message-to', 'sub_fastwhisper', 'sub-fastwhisper-manager')
+                return
+            end
             if o.menu_switch then
                 mp.commandv('script-message-to', 'sub_fastwhisper', 'sub-fastwhisper-backend', 'whisper')
                 phase = 93
                 return
             end
+            phase = 93
+        elseif phase == 70 and mp.get_property_native('user-data/uosc/menu/type') == 'ai-subtitle-manager' and mp.get_time() - previous > 0.4 then
+            local status = mp.get_property_native('user-data/ai-subtitles/status', {})
+            check(status.cached and not status.running, 'management status reflects current completed cache')
+            mp.commandv('screenshot-to-file', o.root .. '/management.png', 'window')
+            mp.commandv('keypress', 'HOME')
+            phase, previous = 71, mp.get_time()
+        elseif phase == 71 and mp.get_time() - previous > 0.2 then
+            mp.commandv('keypress', 'DOWN'); phase, previous = 72, mp.get_time()
+        elseif phase == 72 and mp.get_time() - previous > 0.2 then
+            mp.commandv('keypress', 'ENTER'); phase = 73
+        elseif phase == 73 and mp.get_property_native('user-data/ai-subtitles/status/running') then
+            verify(first_result) -- Previous completed result remains valid while regenerating.
+            phase = 74
+        elseif phase == 74 and not mp.get_property_native('user-data/ai-subtitles/status/running') then
+            verify(first_result)
+            mp.commandv('script-message-to', 'sub_fastwhisper', 'sub-fastwhisper-export', o.root .. '/selected-export.srt')
+            phase = 75
+        elseif phase == 75 and cache.read(o.root .. '/selected-export.srt') then
+            check(cache.read(o.root .. '/selected-export.srt') == cache.read(first_result), 'explicit export matches completed result')
+            clean_media_folder(o.first); clean_media_folder(o.second)
+            mp.commandv('keypress', 'ESC')
+            if o.menu_switch then mp.commandv('script-message-to', 'sub_fastwhisper', 'sub-fastwhisper-backend', 'whisper') end
             phase = 93
         elseif phase == 93 then
             if o.menu_switch then

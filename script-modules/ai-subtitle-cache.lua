@@ -94,13 +94,25 @@ function M.commit(entry, source)
     if not M.valid_srt(data) then return false, 'No valid SRT output' end
     local pending = entry.srt .. '.pending'
     if not M.write(pending, data) then return false, 'Cannot write AI subtitle cache' end
-    -- The completion marker is installed last; incomplete/cancelled jobs cannot be reused.
-    os.remove(entry.manifest)
-    os.remove(entry.srt)
-    if not os.rename(pending, entry.srt) then return false, 'Cannot finalize cached SRT' end
     local meta = utils.format_json({schema = 1, complete = true,
         identity = entry.identity, payload = M.digest(data)})
-    if not M.write(entry.manifest, meta .. '\n') then return false, 'Cannot mark AI subtitle cache complete' end
+    if not M.write(entry.manifest .. '.pending', meta .. '\n') then return false, 'Cannot stage cache marker' end
+    local old_srt, old_manifest = M.read(entry.srt), M.read(entry.manifest)
+    -- Regeneration must preserve the last completed result even if installation fails.
+    if old_srt and not M.write(entry.srt .. '.previous', old_srt) then return false, 'Cannot back up completed SRT' end
+    if old_manifest and not M.write(entry.manifest .. '.previous', old_manifest) then return false, 'Cannot back up cache marker' end
+    local function restore(reason)
+        local restored = true
+        if old_srt then restored = M.write(entry.srt, old_srt) and restored else os.remove(entry.srt) end
+        if old_manifest then restored = M.write(entry.manifest, old_manifest) and restored else os.remove(entry.manifest) end
+        return false, reason .. (restored and '' or '; restore failed, .previous backups retained')
+    end
+    -- The marker is installed last; incomplete/cancelled jobs cannot be reused.
+    if old_manifest and not os.remove(entry.manifest) then return false, 'Cannot replace cache marker' end
+    if old_srt and not os.remove(entry.srt) then return restore('Cannot replace cached SRT') end
+    if not os.rename(pending, entry.srt) then return restore('Cannot finalize cached SRT') end
+    if not os.rename(entry.manifest .. '.pending', entry.manifest) then return restore('Cannot finalize cache marker') end
+    os.remove(entry.srt .. '.previous'); os.remove(entry.manifest .. '.previous')
     return true
 end
 

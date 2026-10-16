@@ -112,6 +112,7 @@ local state = {}
 local time_ranges = {}
 local progress_cache = {}
 local translated_cache = {}
+local management_menu
 
 local is_windows = package.config:sub(1, 1) == "\\"
 
@@ -198,6 +199,16 @@ local function current_entry(extra)
             tostring(o.api_temperature), o.font_name, extra or ''})
     end
     return subtitle_cache.entry(cache_root, identity)
+end
+
+local function publish_status()
+    local entry = current_entry()
+    local cached = entry and subtitle_cache.lookup(entry) ~= nil or false
+    mp.set_property_native('user-data/ai-subtitles/status', {backend = selected_backend,
+        running = whisper_running, cached = cached, media = entry ~= nil})
+    if management_menu and mp.get_property_native('user-data/uosc/menu/type') == 'ai-subtitle-manager' then
+        mp.commandv('script-message-to', 'uosc', 'update-menu', utils.format_json(management_menu()))
+    end
 end
 
 local function begin_work(entry)
@@ -326,6 +337,7 @@ local function load_cached(entry, auto)
         if file_exists(ass) then append_sub(ass, auto) else append_sub(translated, auto) end
     end
     msg.info('AI subtitle cache reused: ' .. entry.key)
+    publish_status()
     if not auto then mp.osd_message('已复用 AI 字幕缓存', 4) end
     return true
 end
@@ -333,12 +345,20 @@ end
 local function finish_recognition(source)
     local ok, err = subtitle_cache.commit(active_entry, source)
     if not ok then mp.osd_message('AI 字幕生成失败：' .. err, 5); msg.error(err); return false end
+    -- New recognition invalidates translations of the previous transcript only on success.
+    for _, path in ipairs({(active_entry.srt:gsub('%.srt$', '.translate.srt')),
+        (active_entry.srt:gsub('%.srt$', '.' .. o.translate .. '.ass'))}) do
+        local exists, id = check_sub(path)
+        if exists then mp.commandv('sub-remove', id) end
+        os.remove(path); os.remove(path .. '.complete')
+    end
     local present, track = check_sub(subtitles_file)
     if present then mp.commandv('sub-remove', track) end
     subtitles_file = active_entry.srt
     append_sub(subtitles_file)
     mp.osd_message('AI 字幕已生成并缓存', 5)
     msg.info('AI subtitle cache completed: ' .. active_entry.key)
+    publish_status()
     return true
 end
 
@@ -363,6 +383,7 @@ local function reset_session()
     start_index, in_progress_batches, translated_batches_count = 1, 0, 0
     time_ranges, progress_cache, translated_cache, state = {}, {}, {}, {}
     mp.set_osd_ass(0, 0, '')
+    publish_status()
 end
 
 local function parse_sub(filename)
@@ -884,6 +905,7 @@ local function fastwhisper()
     append_subtitle_count = 1
     subtitles_written = false
     whisper_running = true
+    publish_status()
 
     local args = fastwhisper_cmd(path, output_path)
     if selected_backend == 'qwen' then
@@ -900,7 +922,6 @@ local function fastwhisper()
         capture_stderr = true, args = args }, function(success, res)
         if token ~= generation then cleanup_work(job_work); return end
         recognition_job = nil
-        whisper_running = false
         mp.set_osd_ass(screenx, screeny, "")
         if success and res and res.status == 0 then
             if selected_backend == 'qwen' then msg.info(res.stdout or '') end
@@ -917,6 +938,8 @@ local function fastwhisper()
             mp.osd_message("AI subtitle generation failed, check console for more info.")
             msg.error('AI subtitle generation failed: ' .. tostring(res and res.stderr or 'subprocess failed'))
         end
+        whisper_running = false
+        publish_status()
     end)
 end
 ------------------------
@@ -1152,8 +1175,8 @@ local function fastwhisper_cache(current_pos, subtitle_count)
 end
 ------------------------
 
-local function whisper()
-    if whisper_running then return end
+local function whisper(force)
+    if whisper_running then mp.osd_message('AI 字幕任务正在进行，可先取消任务', 4); return end
     if selected_backend == 'qwen' then
         if is_protocol(mp.get_property('path')) then
             mp.osd_message('Qwen 目前支持本地媒体；网络媒体请选择 Whisper', 5); return
@@ -1167,7 +1190,7 @@ local function whisper()
     end
     local entry = current_entry()
     if not entry then mp.osd_message('请先打开媒体文件', 4); return end
-    if load_cached(entry, false) then return end
+    if not force and load_cached(entry, false) then return end
     reset_session()
     if not begin_work(entry) then return end
     gpt_api_enabled = o.api_key and not o.api_key:match('^%s*$') or false
@@ -1222,16 +1245,66 @@ local function select_backend(backend)
         if mp.get_property('path') then load_cached(current_entry(), true) end
     end
     mp.osd_message('AI 字幕方案：' .. (selected_backend == 'qwen' and 'Qwen3-ASR 1.7B' or ('Whisper ' .. o.model)), 4)
+    publish_status()
     if mp.get_property_native('user-data/uosc/menu/type') == 'ai-subtitle-backend' then
         mp.commandv('script-message-to', 'uosc', 'update-menu', utils.format_json(backend_menu()))
     end
 end
 
+management_menu = function()
+    local entry = current_entry()
+    local cached = entry and subtitle_cache.lookup(entry) ~= nil
+    local function action(title, message, hint)
+        return {title = title, hint = hint, value = {'script-message-to', 'sub_fastwhisper', message}}
+    end
+    return {type = 'ai-subtitle-manager', title = 'AI 字幕管理', keep_open = true,
+        footnote = '重新生成成功前保留旧缓存；导出位置由你选择，媒体目录不自动新增文件。', items = {
+            {title = '当前方案：' .. (selected_backend == 'qwen' and 'Qwen3-ASR 1.7B' or ('Whisper ' .. o.model)), selectable = false},
+            {title = whisper_running and '任务：正在生成' or '任务：空闲', selectable = false},
+            {title = cached and '缓存：有有效完成字幕' or '缓存：当前设置无完成字幕', selectable = false},
+            action('生成／复用 AI 字幕', 'sub-fastwhisper'),
+            action('强制重新生成', 'sub-fastwhisper-regenerate', '成功后替换当前方案的缓存'),
+            action('导出完成字幕…', 'sub-fastwhisper-export', cached and 'SRT' or '需先完成生成'),
+            action('打开缓存目录', 'sub-fastwhisper-open-cache'),
+            action('选择识别方案…', 'sub-fastwhisper-backend-menu'),
+            action('取消当前任务', 'sub-fastwhisper-cancel')}}
+end
+
+local function export_cached(destination)
+    local entry = current_entry()
+    local source = entry and subtitle_cache.lookup(entry)
+    if not source then mp.osd_message('当前方案没有有效的完成字幕，请先生成', 5); return end
+    local args = {'powershell.exe', '-NoProfile', '-NonInteractive', '-STA', '-ExecutionPolicy', 'Bypass',
+        '-File', mp.command_native({'expand-path', '~~/tools/export-ai-subtitle.ps1'}),
+        '-Source', source, '-SuggestedName', mp.get_property('filename/no-ext', 'subtitles') .. '.srt'}
+    if destination and destination ~= '' then args[#args + 1] = '-Destination'; args[#args + 1] = destination end
+    local token = generation
+    mp.command_native_async({name = 'subprocess', args = args, playback_only = false,
+        capture_stdout = true, capture_stderr = true}, function(ok, result)
+        if token ~= generation then return end
+        if ok and result and result.status == 0 then mp.osd_message('AI 字幕已导出', 4)
+        elseif result and result.status == 2 then mp.osd_message('已取消导出', 3)
+        else msg.error('Subtitle export failed: ' .. tostring(result and result.stderr)); mp.osd_message('字幕导出失败，请查看控制台；已有文件不会被静默覆盖', 6) end
+    end)
+end
+
 mp.add_hook('on_unload', 50, reset_session)
-mp.register_event('file-loaded', function() load_cached(current_entry(), true) end)
+mp.register_event('file-loaded', function() load_cached(current_entry(), true); publish_status() end)
 
 mp.register_script_message("sub-translate", translate_srt_file)
-mp.register_script_message("sub-fastwhisper", whisper)
+mp.register_script_message("sub-fastwhisper", function() whisper(false) end)
+mp.register_script_message('sub-fastwhisper-regenerate', function() whisper(true) end)
+mp.register_script_message('sub-fastwhisper-manager', function()
+    mp.commandv('script-message-to', 'uosc', 'open-menu', utils.format_json(management_menu()))
+end)
+mp.register_script_message('sub-fastwhisper-export', export_cached)
+mp.register_script_message('sub-fastwhisper-open-cache', function()
+    local entry = current_entry()
+    local path = entry and utils.file_info(entry.dir) and entry.dir or cache_root
+    local ok, err = subtitle_cache.mkdir(path)
+    if not ok then msg.error(tostring(err)); return end
+    mp.commandv('run', 'explorer.exe', path:gsub('/', '\\'))
+end)
 mp.register_script_message('sub-fastwhisper-cancel', reset_session)
 mp.register_script_message('sub-fastwhisper-backend', select_backend)
 mp.register_script_message('sub-fastwhisper-backend-menu', function()

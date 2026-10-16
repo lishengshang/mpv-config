@@ -20,6 +20,7 @@ def main():
     parser.add_argument('--engine', choices=['whisper', 'qwen'], default='whisper')
     parser.add_argument('--menu-switch', action='store_true', help='Select Qwen through actual uosc key routing and restore Whisper')
     parser.add_argument('--full-config', action='store_true', help='Load actual root configuration with only the two test scripts')
+    parser.add_argument('--management', action='store_true', help='Exercise the actual management menu, forced regeneration and explicit export')
     args = parser.parse_args()
     if args.menu_switch and args.engine != 'qwen':
         parser.error('--menu-switch requires --engine qwen')
@@ -87,19 +88,25 @@ def main():
     opts.append('asr-playback-timeout=600')
     if args.menu_switch:
         opts.append('asr-playback-menu_switch=yes')
+    if args.management:
+        opts.append('asr-playback-management=yes')
     log_path = folder / 'player.log'
     command = [str(CONFIG.parent / 'mpv.exe'), '--no-config', '--config-dir=' + str(CONFIG),
                '--load-scripts=no', '--script=' + str(CONFIG / 'scripts/sub-fastwhisper.lua'),
                '--script=' + str(CONFIG / 'tools/test_ai_subtitles_playback.lua'),
                '--input-conf=' + str(CONFIG / 'input.conf'), '--script-opts=' + ','.join(opts),
                '--vo=null', '--ao=null', '--pause=yes', '--idle=yes', '--keep-open=yes',
-               '--save-position-on-quit=no', '--resume-playback=no', '--term-status-msg=',
+               '--save-position-on-quit=no', '--resume-playback=no', '--term-status-msg=', '--input-ipc-server=',
                '--log-file=' + str(log_path), str(first)]
     if args.full_config:
         command.remove('--no-config')
         command.insert(1, '--msg-level=all=warn,sub_fastwhisper=info,test_ai_subtitles_playback=info')
-    if args.menu_switch:
+    if args.menu_switch or args.management:
         command.insert(1, '--script=' + str(CONFIG / 'scripts/uosc'))
+    if args.management:
+        command.remove('--vo=null')
+        command[1:1] = ['--vo=gpu-next', '--gpu-api=d3d11', '--osc=no', '--geometry=1280x720',
+                        '--osd-fonts-dir=' + str(CONFIG / 'fonts'), '--osd-font=Noto Sans Mono CJK SC']
     timed_out = False
     with (folder / 'console.log').open('wb') as console:
         proc = subprocess.Popen(command, cwd=CONFIG, stdout=console, stderr=subprocess.STDOUT,
@@ -117,12 +124,17 @@ def main():
     outputs = [Path(result[key]) for key in ('first', 'second') if key in result]
     text_valid = len(outputs) == 2 and all(
         'cache' in p.read_text(encoding='utf-8').lower() and '-->' in p.read_text(encoding='utf-8') for p in outputs)
+    expected_jobs = 3 if args.management else 2
     passed = (code == 0 and not timed_out and before == after and text_valid
               and 'ASR CACHE PLAYBACK PASS:' in log and 'ASR CACHE PLAYBACK FAIL:' not in log
-              and 'Lua error' not in log and log.count('AI subtitle cache completed:') == 2
+              and 'Lua error' not in log and log.count('AI subtitle cache completed:') == expected_jobs
               and log.count('AI subtitle cache reused:') >= 2)
     if args.engine == 'qwen':
-        passed = passed and log.count('QWEN_ASR_OK ') == 2 and result.get('menu_switch', False) == args.menu_switch
+        passed = passed and log.count('QWEN_ASR_OK ') == expected_jobs and result.get('menu_switch', False) == args.menu_switch
+    if args.management:
+        exported = real_root / 'selected-export.srt'
+        passed = passed and exported.is_file() and exported.read_bytes() == outputs[0].read_bytes()
+        passed = passed and (real_root / 'management.png').is_file()
     report = dict(passed=passed, exit_code=code, timed_out=timed_out, source_folders_unchanged=before == after,
                   valid_outputs=text_valid, completed_jobs=log.count('AI subtitle cache completed:'),
                   reuse_events=log.count('AI subtitle cache reused:'), engine=args.engine,
@@ -132,6 +144,7 @@ def main():
                   mock_passed=True, outputs=[str(p) for p in outputs], log=str(log_path))
     report['full_root_config'] = args.full_config
     report['menu_switch'] = args.menu_switch
+    report['management'] = args.management
     (folder / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     print(('PASS' if passed else 'FAIL') + ': ' + str(folder / 'report.json'))
     return 0 if passed else 1

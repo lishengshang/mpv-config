@@ -216,6 +216,42 @@ local function suite()
     check(cache.read(translated .. '.complete') == cache.digest(cache.read(translated)),
         'translation completion checksum recorded')
     hooks.on_unload()
+    boot(a)
+    events['file-loaded']()
+    handlers['sub-fastwhisper-manager']()
+    local manager = utils.parse_json(commands[#commands][4])
+    check(manager.type == 'ai-subtitle-manager' and manager.items[3].title:find('有有效'), 'management shows current completed cache')
+    handlers['sub-fastwhisper-regenerate']()
+    check(#jobs == 1 and cache.read(completed) == good, 'regeneration bypasses reuse and retains old completed result')
+    complete('', 7)
+    check(cache.read(completed) == good, 'failed regeneration preserves completed cache')
+    handlers['sub-fastwhisper-regenerate']()
+    local cancelled = jobs[#jobs].callback
+    handlers['sub-fastwhisper-cancel']()
+    cancelled(true, {status = 0})
+    check(cache.read(completed) == good, 'cancelled regeneration preserves old result')
+    local old_translation = completed:gsub('%.srt$', '.translate.srt')
+    check(cache.write(old_translation, good) and cache.write(old_translation .. '.complete', cache.digest(good)), 'old translation fixture')
+    handlers['sub-fastwhisper-regenerate']()
+    complete((good:gsub('A valid subtitle.', 'A newly generated subtitle.')))
+    check(cache.read(completed):find('newly generated') and not cache.read(old_translation .. '.complete'),
+        'successful regeneration replaces transcript and invalidates old translation')
+    check(state['user-data/ai-subtitles/status'].cached and not state['user-data/ai-subtitles/status'].running,
+        'published status matches completed task')
+    handlers['sub-fastwhisper-export'](path('chosen-export.srt'))
+    check(jobs[#jobs].spec.args[1] == 'powershell.exe' and jobs[#jobs].spec.args[#jobs[#jobs].spec.args] == path('chosen-export.srt'),
+        'export uses explicit destination in argument array')
+    hooks.on_unload()
+    local transaction = cache.entry(path('results'), 'transaction rollback fixture')
+    check(cache.prepare(transaction, 1, 1) and cache.write(path('new.srt'), good) and cache.commit(transaction, path('new.srt')), 'completed transaction fixture')
+    check(cache.write(path('new.srt'), (good:gsub('valid', 'replacement'))), 'replacement transaction fixture')
+    local rename = os.rename
+    for _, target in ipairs({transaction.srt, transaction.manifest}) do
+        os.rename = function(from, to) if to == target then return nil, 'injected install failure' end; return rename(from, to) end
+        local ok = cache.commit(transaction, path('new.srt'))
+        os.rename = rename
+        check(not ok and cache.lookup(transaction) and cache.read(transaction.srt) == good, 'SRT/marker install failure restores completed result')
+    end
 end
 host.add_timeout(0.1, function()
     local ok, err = pcall(suite)

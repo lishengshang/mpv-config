@@ -10,7 +10,8 @@
 - 菜单选择跨文件保持，重启播放器恢复配置中的 `backend=whisper`；要长期默认 Qwen，可自行将配置改成 `backend=qwen`。字幕位置/时延重置不改变识别方案。
 - 缓存按后端、媒体、音轨和识别/翻译设置区分，完成且有效的 SRT 才能复用；按生成键可复用，重新打开媒体会尝试加载。Whisper 原有缓存键保留，Qwen 使用独立命名空间。中途结果与完成缓存分开，卸载取消旧任务并隔离旧回调。
 - 缓存不随 Git 或配置 ZIP 分发，清理会失去生成结果；需要长期保存时备份对应完成字幕。媒体移动/修改或更换模型设置可能生成新的缓存，不只按片名匹配。
-- 当前没有专用强制重新生成或导出菜单；需要在视频旁保存时手动复制完成的 SRT。不要把字幕重置当重新识别或清缓存。
+- **字幕 → 下载／生成 → AI 字幕管理…** 查看当前后端、任务与完成缓存状态，生成/复用、强制重新生成、导出完成 SRT 或打开缓存目录。重新生成跳过缓存复用，但失败/取消保留旧结果；成功后替换当前缓存并移除旧译文，其他媒体与后端的结果不变。
+- 导出弹出 Windows 保存对话框，由用户选择位置；只有明确选择导出才可在媒体旁保存。对话框覆盖已有文件需确认；带目标路径的控制台导出消息拒绝覆盖。位置/字号/时延重置不重新识别，也不删除缓存。
 - 翻译需兼容 API 与 key，私人 key 写在 `local.conf`；没有 key 时保留原语言识别。选择本地外部 SRT 后可用翻译消息，内封字幕先导出，ASS 不能直接走 SRT 解析。
 
 控制台消息：
@@ -21,6 +22,10 @@ script-message-to sub_fastwhisper sub-fastwhisper-cancel
 script-message-to sub_fastwhisper sub-fastwhisper-backend-menu
 script-message-to sub_fastwhisper sub-fastwhisper-backend whisper
 script-message-to sub_fastwhisper sub-fastwhisper-backend qwen
+script-message-to sub_fastwhisper sub-fastwhisper-manager
+script-message-to sub_fastwhisper sub-fastwhisper-regenerate
+script-message-to sub_fastwhisper sub-fastwhisper-export
+script-message-to sub_fastwhisper sub-fastwhisper-open-cache
 script-message-to sub_fastwhisper sub-translate
 ```
 
@@ -52,11 +57,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/setup-qwen-asr.ps1 -Co
 
 ```powershell
 python tools/test_qwen_asr.py
+python tools/test_ai_subtitles_mock.py
 python tools/test_ai_subtitles.py --full-config
 python tools/test_ai_subtitles.py --full-config --engine qwen --menu-switch
+python tools/test_ai_subtitles.py --full-config --management
 ```
 
-测试使用 320×180/24fps H.264 + AAC 英语合成语音，检查有效 SRT、完成标记、目录同名媒体隔离、重复打开与按键复用、下一文件、字幕状态重置及媒体目录无新增字幕；Qwen 菜单测试加载真实 uosc，经导航键/回车切换，结束恢复 Whisper。44 项 Lua 模拟断言另覆盖失败/空输出、缓存损坏、取消与旧回调、切换后缓存隔离和保留其他字幕；9 项 Python 检查覆盖语言映射、切片、标点、断句和时间格式。
+测试使用 320×180/24fps H.264 + AAC 英语合成语音，检查有效 SRT、完成标记、目录同名媒体隔离、重复打开与按键复用、下一文件、字幕状态重置及媒体目录无新增字幕；Qwen 菜单测试加载真实 uosc，经导航键/回车切换，结束恢复 Whisper。`--management` 还通过真实菜单触发第三次生成，并导出至明确指定的测试目录。58 项 Lua 模拟断言另覆盖失败/空输出、缓存损坏、取消与旧回调、重新生成失败保留旧缓存/成功移除旧译文，以及后端隔离与外部字幕保留；9 项 Python 检查覆盖语言映射、切片、标点、断句和时间格式。
 
 2026-10-15 本机 RTX 4070 Laptop 8GB 验收：
 
@@ -67,6 +74,8 @@ python tools/test_ai_subtitles.py --full-config --engine qwen --menu-switch
 - 部署脚本复核通过：`cache/qwen-setup-verify.log`；模型和 CUDA 环境可用，本机路径已写入忽略的 `local.conf`。
 
 上述使用实际根配置和指定测试脚本，未加载全部日常脚本；短样例不等同多语言准确率或长视频速度评测。其他语种、网络/直播、真实翻译 API、与重型 GPU 增强同时运行仍需分别验收。
+
+2026-10-16 管理菜单回归：Whisper `cache/asr-playback-20261016-153111/`、Qwen `cache/asr-playback-20261016-153433/` 均通过三次真实生成（含菜单强制重新生成）、缓存复用、下一文件/重置和指定路径导出；媒体目录不变。完成缓存不因失败/取消丢失、旧译文失效由 58 项 Lua 断言覆盖；已有目标文件的非交互导出拒绝覆盖。保存对话框本身及其覆盖确认尚未人工点选验收。
 
 ## 候选方案备忘
 
