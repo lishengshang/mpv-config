@@ -12,6 +12,9 @@
       "8ab3f8b66dcf2c2471f4dbba5cee21cda06843b7"
     ]
   },
+  "mpv_local_patches": {
+    "v0.41.0": ["release/patches/mpv-v0.41.0-audio-hotplug-shutdown.patch"]
+  },
   "vapoursynth_headers_commit": "e46204429041e95a881b61eedddd46c08f9a307c",
   "luasocket_commit": "95b7efa9da506ef968c1347edf3fc56370f0deed",
   "required_filters": ["vapoursynth", "d3d11vpp"],

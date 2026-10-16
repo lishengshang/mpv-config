@@ -23,6 +23,15 @@ def sample_plan():
 
 
 class ReleaseChecks(unittest.TestCase):
+    def test_local_patches_are_scoped_and_reject_external_paths(self):
+        plan = sample_plan()
+        self.assertTrue(release.selected_local_patches(plan))
+        plan['mpv_tag'] = 'v0.42.0'
+        self.assertEqual(release.selected_local_patches(plan), [])
+        plan['build']['mpv_local_patches'] = {'v0.42.0': ['../external.patch']}
+        with self.assertRaises(ValueError):
+            release.selected_local_patches(plan)
+
     def test_official_stable_selection_rejects_nightly_and_prerelease(self):
         items = [dict(tag_name=tag, prerelease=pre, draft=False) for tag, pre in
                  [('git-release', False), ('20261016', False), ('v0.42.0-rc1', False),

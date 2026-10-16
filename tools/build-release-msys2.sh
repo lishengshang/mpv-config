@@ -59,6 +59,22 @@ PY
     git -C "$work/mpv-source" apply "$work/$backport.patch"
 done < "$work/backports.txt"
 
+# Committed project fixes are separately identified and scoped to exact tags.
+python - "$plan" "$work/local-patches.txt" <<'PY'
+from pathlib import Path
+import sys
+sys.path.insert(0, 'tools')
+from release import load_plan, selected_local_patches
+Path(sys.argv[2]).write_text(''.join(path + '\n' for path in selected_local_patches(load_plan(sys.argv[1]))),
+                           encoding='utf-8', newline='\n')
+PY
+while IFS= read -r patch; do
+    [[ -n $patch ]] || continue
+    patch=$(pwd)/$patch
+    git -C "$work/mpv-source" apply --check "$patch"
+    git -C "$work/mpv-source" apply "$patch"
+done < "$work/local-patches.txt"
+
 # The patched Windows interface loads VSScript.dll only when the filter starts.
 mkdir -p "$work/pkgconfig"
 headers_include=$(cygpath -m "$work/vs-headers/include")

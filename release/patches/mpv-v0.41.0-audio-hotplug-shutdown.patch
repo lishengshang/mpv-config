@@ -1,0 +1,49 @@
+diff --git a/player/main.c b/player/main.c
+--- a/player/main.c
++++ b/player/main.c
+@@ -180,6 +180,7 @@
+     mpctx->ipc_ctx = NULL;
+ 
+     uninit_audio_out(mpctx);
++    command_uninit_audio_hotplug(mpctx);
+     uninit_video_out(mpctx);
+ 
+     // If it's still set here, it's an error.
+diff --git a/player/command.h b/player/command.h
+--- a/player/command.h
++++ b/player/command.h
+@@ -31,6 +31,7 @@
+ 
+ void command_init(struct MPContext *mpctx);
+ void command_uninit(struct MPContext *mpctx);
++void command_uninit_audio_hotplug(struct MPContext *mpctx);
+ 
+ // Runtime context for a single command.
+ struct mp_cmd_ctx {
+diff --git a/player/command.c b/player/command.c
+--- a/player/command.c
++++ b/player/command.c
+@@ -7646,6 +7646,14 @@
+ #undef OPT_BASE_STRUCT
+ #undef ARG
+ 
++// Release device notifications while the Windows GUI COM apartment still lives.
++void command_uninit_audio_hotplug(struct MPContext *mpctx)
++{
++    struct command_ctx *ctx = mpctx->command_ctx;
++    ao_hotplug_destroy(ctx->hotplug);
++    ctx->hotplug = NULL;
++}
++
+ void command_uninit(struct MPContext *mpctx)
+ {
+     struct command_ctx *ctx = mpctx->command_ctx;
+@@ -7653,7 +7661,7 @@
+     mp_assert(!ctx->cache_dump_cmd); // closing the demuxer must have aborted it
+ 
+     overlay_uninit(mpctx);
+-    ao_hotplug_destroy(ctx->hotplug);
++    command_uninit_audio_hotplug(mpctx);
+ 
+     m_option_free(&script_props_type, &ctx->script_props);
+ 

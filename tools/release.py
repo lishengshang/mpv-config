@@ -134,6 +134,7 @@ def load_plan(path):
     if plan['tag'] != expected or plan['repository'] != plan['build']['repository']:
         raise ValueError('Inconsistent release identity')
     selected_backports(plan)
+    selected_local_patches(plan)
     return plan
 
 
@@ -142,6 +143,14 @@ def selected_backports(plan):
     if not isinstance(commits, list) or any(not isinstance(commit, str) or not SHA.fullmatch(commit) for commit in commits):
         raise ValueError('Backports must be immutable upstream commits')
     return commits
+
+
+def selected_local_patches(plan):
+    paths = plan['build'].get('mpv_local_patches', {}).get(plan['mpv_tag'], [])
+    if not isinstance(paths, list) or any(not isinstance(path, str) or not
+            re.fullmatch(r'release/patches/[A-Za-z0-9_-][A-Za-z0-9_.-]*\.patch', path) for path in paths):
+        raise ValueError('Local patches must be committed release/patches files')
+    return paths
 
 
 def adapt_backport(text, commit, tag):
@@ -394,6 +403,10 @@ def archive_release(args):
     if selected_backports(plan):
         notes += '\nUpstream compatibility backports (included in mpv-source.patch):\n' + ''.join(
             f'- [{commit[:7]}](https://github.com/mpv-player/mpv/commit/{commit})\n' for commit in selected_backports(plan))
+    if selected_local_patches(plan):
+        notes += '\nProject compatibility patches (included in mpv-source.patch):\n' + ''.join(
+            f'- [{path}](https://github.com/{plan["repository"]}/blob/{plan["config_commit"]}/{path})\n'
+            for path in selected_local_patches(plan))
     if menu_path:
         notes += '\nFull menu, subtitle controls, next-file and reset checks passed with software D3D11 (WARP). See menu-report.json.\n'
     (output / 'release-notes.md').write_text(notes, encoding='utf-8')
