@@ -144,6 +144,19 @@ def selected_backports(plan):
     return commits
 
 
+def adapt_backport(text, commit, tag):
+    # Upstream changed sub-delay precision before adding independent sub-scale.
+    # Adapt only unchanged context; retain 0.41's original sub-delay types.
+    if tag == 'v0.41.0' and commit == '8ab3f8b66dcf2c2471f4dbba5cee21cda06843b7':
+        for old, new in [('OPT_DOUBLE(sub_delay[1])', 'OPT_FLOAT(sub_delay[1])'),
+                         ('double sub_delay[2];', 'float sub_delay[2];')]:
+            matches = [line for line in text.splitlines() if old in line]
+            if len(matches) != 1 or not matches[0].startswith(' '):
+                raise ValueError('Unexpected upstream patch context; manual review required')
+            text = text.replace(old, new)
+    return text
+
+
 def hash_file(path):
     with Path(path).open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest() if hasattr(hashlib, 'file_digest') else _hash_stream(stream)
@@ -224,6 +237,11 @@ def validate_capabilities(runtime, settings, env=None):
         for feature in settings[key]:
             if not re.search(r'^\s*' + re.escape(feature) + r'\s', listing, re.M):
                 raise ValueError('Player is missing required capability: ' + feature)
+    if settings.get('required_options'):
+        listing = run([mpv, '--no-config', '--list-options'], env=env, cwd=runtime)
+        for option in settings['required_options']:
+            if not re.search(r'^\s*--' + re.escape(option) + r'\s', listing, re.M):
+                raise ValueError('Player is missing required option: ' + option)
     return run([mpv, '--version'], env=env, cwd=runtime).splitlines()[0]
 
 
@@ -362,6 +380,12 @@ def archive_release(args):
     (output / 'SHA256SUMS').write_text(hash_file(target) + '  ' + target.name + '\n', encoding='utf-8')
     dump(output / 'release-plan.json', plan)
     dump(output / 'smoke-report.json', report)
+    menu_path = getattr(args, 'menu_report', None)
+    if menu_path:
+        menu_report = json.loads(Path(menu_path).read_text(encoding='utf-8'))
+        if menu_report.get('ok') is not True or menu_report.get('player_sha256') != hash_file(player / 'mpv.exe'):
+            raise ValueError('Menu check failed or belongs to a different player')
+        dump(output / 'menu-report.json', menu_report)
     notes = (f'Based on [{plan["mpv_tag"]}]({plan["upstream_url"]}), source `{plan["mpv_commit"]}`.\n\n'
              f'Configuration commit: `{plan["config_commit"]}`. Windows x64, project build with VapourSynth.\n\n'
              'Automated checks cover CPU playback, script startup, next-file/reset and native command parsing. '
@@ -370,6 +394,8 @@ def archive_release(args):
     if selected_backports(plan):
         notes += '\nUpstream compatibility backports (included in mpv-source.patch):\n' + ''.join(
             f'- [{commit[:7]}](https://github.com/mpv-player/mpv/commit/{commit})\n' for commit in selected_backports(plan))
+    if menu_path:
+        notes += '\nFull menu, subtitle controls, next-file and reset checks passed with software D3D11 (WARP). See menu-report.json.\n'
     (output / 'release-notes.md').write_text(notes, encoding='utf-8')
     print('Created: ' + str(target))
 
@@ -415,11 +441,17 @@ def publish_release(args):
         raise ValueError('Release already exists; increase the configuration revision')
     if existing and existing['target_commitish'] != plan['config_commit']:
         raise ValueError('Draft belongs to a different configuration commit; increase revision')
+    menu_report = json.loads((directory / 'menu-report.json').read_text(encoding='utf-8'))
+    with zipfile.ZipFile(directory / expected_archive) as zipped:
+        with zipped.open('MPV/mpv.exe') as binary:
+            binary_hash = _hash_stream(binary)
+    if menu_report.get('ok') is not True or menu_report.get('player_sha256') != binary_hash:
+        raise ValueError('Final player has not passed the full menu check')
     if not existing:
         run(['gh', 'release', 'create', plan['tag'], '--repo', repo, '--target', plan['config_commit'],
              '--draft', '--prerelease', '--latest=false', '--title', plan['tag'],
              '--notes-file', directory / 'release-notes.md'])
-    for filename in (expected_archive, 'SHA256SUMS', 'release-plan.json', 'smoke-report.json'):
+    for filename in (expected_archive, 'SHA256SUMS', 'release-plan.json', 'smoke-report.json', 'menu-report.json'):
         run(['gh', 'release', 'upload', plan['tag'], directory / filename, '--repo', repo, '--clobber'])
     run(['gh', 'release', 'edit', plan['tag'], '--repo', repo,
          '--draft=false', '--prerelease', '--latest=false'])
@@ -443,6 +475,7 @@ def main():
     archive = commands.add_parser('archive')
     archive.add_argument('--player', required=True, type=Path)
     archive.add_argument('--report', required=True, type=Path)
+    archive.add_argument('--menu-report', required=True, type=Path)
     archive.add_argument('--output', required=True, type=Path)
     publish = commands.add_parser('publish')
     publish.add_argument('--assets', required=True, type=Path)

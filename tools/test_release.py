@@ -177,6 +177,42 @@ class ReleaseChecks(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'immutable'):
             release.selected_backports(plan)
 
+    def test_subtitle_backport_changes_only_known_context(self):
+        commit = '8ab3f8b66dcf2c2471f4dbba5cee21cda06843b7'
+        text = ' {"secondary-sub-delay", OPT_DOUBLE(sub_delay[1])},\n     double sub_delay[2];\n+    float sub_scale[2];\n'
+        adapted = release.adapt_backport(text, commit, 'v0.41.0')
+        self.assertIn('OPT_FLOAT(sub_delay[1])', adapted)
+        self.assertIn('+    float sub_scale[2];', adapted)
+        self.assertEqual(release.adapt_backport(text, commit, 'v0.42.0'), text)
+        with self.assertRaisesRegex(ValueError, 'Unexpected upstream patch context'):
+            release.adapt_backport(text.replace('OPT_DOUBLE', 'OPT_UNKNOWN'), commit, 'v0.41.0')
+
+    def test_missing_subtitle_scale_blocks_incompatible_player(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runtime = Path(temp)
+            for name in ('mpv.exe', 'mpv.com'):
+                (runtime / name).touch()
+            with patch.object(release, 'run', side_effect=[
+                    ' vapoursynth description\n d3d11vpp description', ' gpu-next description',
+                    ' --sub-scale Float']):
+                with self.assertRaisesRegex(ValueError, 'secondary-sub-scale'):
+                    release.validate_capabilities(runtime, release.manifest())
+
+    def test_missing_full_menu_report_blocks_publishing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            assets = Path(temp)
+            plan = sample_plan()
+            release.dump(assets / 'release-plan.json', plan)
+            archive = assets / (plan['tag'] + '-windows-x64.zip')
+            archive.write_bytes(b'candidate')
+            release.dump(assets / 'smoke-report.json', dict(passed=True, config_commit='b' * 40,
+                                                           mpv_commit='a' * 40, archive_sha256=release.hash_file(archive)))
+            (assets / 'SHA256SUMS').write_text(release.hash_file(archive) + '  ' + archive.name + '\n')
+            with patch.object(release, 'api', return_value=None), patch.object(release, 'run') as commands:
+                with self.assertRaises(FileNotFoundError):
+                    release.publish_release(argparse.Namespace(assets=assets))
+                commands.assert_not_called()
+
     def test_missing_log_fails_and_keeps_failure_report(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

@@ -1,20 +1,22 @@
 {
   "schema": 1,
   "repository": "lishengshang/mpv-config",
-  "revision": 1,
+  "revision": 2,
   "mpv_repository": "mpv-player/mpv",
   "msys2_environment": "UCRT64",
   "lua_runtime": "luajit",
   "mpv_backports": {
     "v0.41.0": [
       "75b2ccfeb1ce4ed5a40ac9860fa74f3d1265e13f",
-      "44a9b03f244f24e0ea443370cf2cfae0da5767f9"
+      "44a9b03f244f24e0ea443370cf2cfae0da5767f9",
+      "8ab3f8b66dcf2c2471f4dbba5cee21cda06843b7"
     ]
   },
   "vapoursynth_headers_commit": "e46204429041e95a881b61eedddd46c08f9a307c",
   "luasocket_commit": "95b7efa9da506ef968c1347edf3fc56370f0deed",
   "required_filters": ["vapoursynth", "d3d11vpp"],
   "required_outputs": ["gpu-next"],
+  "required_options": ["secondary-sub-scale"],
   "components": [],
   "pending_components": [
     "VS RTX runtime/plugins/models: package and validate against the stable player",

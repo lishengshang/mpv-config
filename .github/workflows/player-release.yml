@@ -93,9 +93,12 @@ jobs:
       - name: Verify isolated playback, all scripts, next file and reset
         shell: pwsh
         run: python tools/release.py check --player cache/release-stage/MPV --evidence cache/release-evidence
+      - name: Verify full menus and subtitle controls with software D3D11
+        shell: pwsh
+        run: python cache/release-stage/MPV/portable_config/tools/test_menu_ui.py --full --software-renderer > cache/release-menu-report.json
       - name: Archive verified candidate
         shell: pwsh
-        run: python tools/release.py archive --player cache/release-stage/MPV --report cache/release-evidence/report.json --output cache/release-assets
+        run: python tools/release.py archive --player cache/release-stage/MPV --report cache/release-evidence/report.json --menu-report cache/release-menu-report.json --output cache/release-assets
       - name: Re-extract final ZIP to a different path and verify playback
         shell: pwsh
         run: python tools/release.py check-archive --assets cache/release-assets --evidence cache/release-archive-evidence
@@ -114,6 +117,8 @@ jobs:
           path: |
             cache/release-evidence/
             cache/release-archive-evidence/
+            cache/release-menu-report.json
+            cache/release-stage/MPV/portable_config/cache/menu-rework/
             cache/release-build/mpv-build/meson-logs/
           if-no-files-found: ignore
           retention-days: 7

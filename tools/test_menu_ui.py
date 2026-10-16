@@ -1,6 +1,7 @@
 """Run the menu integration against real mpv/uosc. Evidence stays in cache."""
 import json
 import argparse
+import hashlib
 import re
 from pathlib import Path
 import subprocess
@@ -14,6 +15,7 @@ def main():
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--full', action='store_true', help='Load the real config and all daily scripts; isolate history and network danmaku')
+    parser.add_argument('--software-renderer', action='store_true', help='Use D3D11 WARP without enhancement shaders for CI menu checks')
     parser.add_argument('--input-conf', type=Path, default=ROOT / 'input.conf', help='Validate an alternate input configuration, such as the staged snapshot')
     options = parser.parse_args()
     folder = ROOT / 'cache/menu-rework' / (datetime.now().strftime('%Y%m%d-%H%M%S') + ('-full' if options.full else ''))
@@ -38,6 +40,8 @@ def main():
             f'--screenshot-directory={folder}', '--screenshot-template=continuous-%n',
             '--reset-on-next-file=vid,aid,sid,secondary-sid,speed,secondary-sub-scale',
             *(f'--script-opts-append={opt}' for opt in opts), f'--log-file={folder / "player.log"}', source]
+    if options.software_renderer:
+        args[1:1] = ['--d3d11-warp=yes', '--glsl-shaders-clr']
     timed_out = False
     with (folder / 'console.log').open('wb') as console:
         proc = subprocess.Popen(args, cwd=ROOT, stdout=console, stderr=subprocess.STDOUT)
@@ -51,6 +55,8 @@ def main():
     report = json.loads(report_path.read_text(encoding='utf-8')) if report_path.is_file() else {'ok': False, 'error': 'missing report'}
     log = (folder / 'player.log').read_text(encoding='utf-8', errors='replace') if (folder / 'player.log').is_file() else ''
     report['exit_code'], report['timed_out'] = code, timed_out
+    report['renderer'] = 'd3d11-warp' if options.software_renderer else 'd3d11-auto'
+    report['player_sha256'] = hashlib.sha256((ROOT.parent / 'mpv.exe').read_bytes()).hexdigest()
     report['fatal_errors'] = [line for line in log.splitlines() if re.match(r'^\[.*?\]\[f\]\[', line)]
     report['runtime_errors'] = [line for line in log.splitlines() if re.match(r'^\[.*?\]\[e\]\[', line)]
     report['ok'] = bool(report.get('ok') and code == 0 and not timed_out and 'MENU UI PASS:' in log)

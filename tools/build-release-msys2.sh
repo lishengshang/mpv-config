@@ -46,6 +46,15 @@ while IFS= read -r backport; do
     printf 'Applying upstream backport: %s\n' "$backport"
     git -C "$work/mpv-source" fetch --depth=2 origin "$backport"
     git -C "$work/mpv-source" diff "$backport^" "$backport" > "$work/$backport.patch"
+    python - "$work/$backport.patch" "$backport" "$plan" <<'PY'
+from pathlib import Path
+import sys
+sys.path.insert(0, 'tools')
+from release import adapt_backport, load_plan
+path = Path(sys.argv[1])
+path.write_text(adapt_backport(path.read_text(encoding='utf-8'), sys.argv[2], load_plan(sys.argv[3])['mpv_tag']),
+                encoding='utf-8', newline='\n')
+PY
     git -C "$work/mpv-source" apply --check "$work/$backport.patch"
     git -C "$work/mpv-source" apply "$work/$backport.patch"
 done < "$work/backports.txt"
