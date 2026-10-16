@@ -43,6 +43,14 @@ CI 运行配置接线、字幕适配、GPU 依赖探针和验收工具失败判�
 
 实现依据：[mpv 输入绑定](https://mpv.io/manual/master/#property-list-input-bindings)、[脚本入口](https://mpv.io/manual/master/#script-location)、[命名绑定实现](https://github.com/mpv-player/mpv/blob/master/player/lua/defaults.lua)。
 
+## 菜单与设置保留回归
+
+`python tools/test_menu_ui.py --full` 加载日常脚本，经真实导航/回车检查菜单、状态、切片与恢复；隔离历史及 IPC，禁用测试网络弹幕。进程失败、错误级日志、缺少报告或截图均判失败。
+
+`CTRL+R` 或菜单“工具与高级 → 播放设置 → 下一文件的设置保留策略”中的“保留全部更改”使用空重置列表。`no` 不是可重置选项名，会在切片时报错，不能作为关闭值。配置默认仍使用原有常用列表，立即恢复操作独立于保留策略。[mpv 选项说明](https://mpv.io/manual/master/#options-reset-on-next-file)。
+
+本机原生回归确认：切换策略不会修改当前速度；当前文件加载时已登记的重置项可能在第一次切片恢复一次，之后加载的文件按空列表保留更改。此策略也不覆盖自动 profile、专用脚本重置或 watch-later 恢复。菜单与快捷键遵循同一原生行为。2026-10-16 本机完整回归：`cache/menu-rework/20261016-154313-full/report.json`，52 步/105 项断言通过，错误级与致命日志均为空。
+
 ## 上游脚本与着色器维护
 
 `M` 或菜单“工具与高级 → 维护 → 检查脚本与着色器更新”先获取 `manager.json` 指定的源并预览，选择“应用安全更新并备份”才修改目标。获取失败会中止整个预览，不使用旧下载结果。源仓库仅位于忽略的 `cache/manager/sources/`，不在脚本目录创建 Git 仓库或修改项目远端。

@@ -32,7 +32,7 @@ def main():
             f'--config-dir={ROOT}', '--load-scripts=' + ('yes' if options.full else 'no'),
             *(f'--script={ROOT / path}' for path in scripts), f'--input-conf={options.input_conf.resolve()}',
             '--vo=gpu-next', '--gpu-api=d3d11', '--ao=null', '--hwdec=no', '--osc=no', '--idle=yes',
-            '--pause=yes', '--resume-playback=no', '--save-position-on-quit=no', '--geometry=1280x720',
+            '--pause=yes', '--input-ipc-server=', '--resume-playback=no', '--save-position-on-quit=no', '--geometry=1280x720',
             '--speed=1', '--mute=no', '--secondary-sub-scale=1', '--video-aspect-override=no', '--loop-file=no',
             '--term-status-msg=', f'--osd-fonts-dir={ROOT / "fonts"}', '--osd-font=Noto Sans Mono CJK SC',
             f'--screenshot-directory={folder}', '--screenshot-template=continuous-%n',
@@ -52,8 +52,9 @@ def main():
     log = (folder / 'player.log').read_text(encoding='utf-8', errors='replace') if (folder / 'player.log').is_file() else ''
     report['exit_code'], report['timed_out'] = code, timed_out
     report['fatal_errors'] = [line for line in log.splitlines() if re.match(r'^\[.*?\]\[f\]\[', line)]
+    report['runtime_errors'] = [line for line in log.splitlines() if re.match(r'^\[.*?\]\[e\]\[', line)]
     report['ok'] = bool(report.get('ok') and code == 0 and not timed_out and 'MENU UI PASS:' in log)
-    report['ok'] &= not report['fatal_errors']
+    report['ok'] &= not (report['fatal_errors'] or report['runtime_errors'])
     report['ok'] &= all((folder / name).is_file() and (folder / name).stat().st_size > 1024
                         for name in ['main.png', 'subtitles.png', 'next-file.png'])
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')

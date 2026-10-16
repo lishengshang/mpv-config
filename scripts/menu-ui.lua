@@ -7,7 +7,11 @@ local entries, watched, actions = {}, {}, {}
 local view, continuous = 'main', nil
 local refresh
 local function trim(s) return (s or ''):match('^%s*(.-)%s*$') end
-local function get(prop) return mp.get_property_native(prop) end
+local function get(prop)
+    -- String-list options need their serialized value for selection and hints.
+    if prop == 'reset-on-next-file' then return mp.get_property(prop, '') end
+    return mp.get_property_native(prop)
+end
 local function on(value)
     if type(value) == 'boolean' then return value end
     if type(value) == 'number' then return value ~= 0 end
@@ -182,7 +186,7 @@ local function choice_data(e)
             end
         end
     elseif prop == 'reset-on-next-file' then
-        choices = {{'常用项目（配置默认）', reset_default}, {'重置全部可重置选项', 'all'}, {'保留全部更改', 'no'}}
+        choices = {{'常用项目（配置默认）', reset_default}, {'重置全部可重置选项', 'all'}, {'保留全部更改', ''}}
         if e.words[5] ~= reset_default then choices[#choices + 1] = {'原快捷键的自定义列表', e.words[5]} end
     else
         for i = 3, #e.words do
@@ -229,7 +233,7 @@ local function make_item(e)
         if e.choices == 'video-aspect-override' and (value == false or value == 'no' or (tonumber(value) or 1) <= 0) then
             text = '原始比例'
         elseif e.choices == 'reset-on-next-file' then
-            text = value == reset_default and '配置默认' or (value == 'all' and '全部重置' or (value == 'no' and '全部保留' or '自定义'))
+            text = value == reset_default and '配置默认' or (value == 'all' and '全部重置' or (value == '' and '全部保留' or '自定义'))
         elseif e.choices == 'af' then
             local af = mp.get_property('af', '')
             text = af:find('dynaudnorm', 1, true) and '动态均衡' or (af:find('loudnorm', 1, true) and '响度标准化' or (#(value or {}) == 0 and '关闭' or '其他滤镜'))
