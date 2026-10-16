@@ -1,0 +1,65 @@
+name: Diagnose unverified player
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_run:
+        description: 'Failed release run containing unverified-player'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  native:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: unverified-player
+          path: cache/MPV
+          run-id: ${{ inputs.artifact_run }}
+          github-token: ${{ github.token }}
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        id: msys2
+        with:
+          msystem: UCRT64
+          pacboy: gdb:p
+      - name: Run original menu sequence under GDB (diagnostic only)
+        shell: pwsh
+        env:
+          GDB_PATH: ${{ steps.msys2.outputs.msys2-location }}/ucrt64/bin/gdb.exe
+        run: |
+          @'
+          import importlib.util, os, pathlib, subprocess, sys
+          root = pathlib.Path('cache/MPV').resolve()
+          path = root / 'portable_config/tools/test_menu_ui.py'
+          spec = importlib.util.spec_from_file_location('menu_test', path)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          original = subprocess.Popen
+          def diagnostic(args, *positional, **options):
+              if pathlib.Path(args[0]).name == 'mpv.exe':
+                  args = [os.environ['GDB_PATH'], '--batch', '--return-child-result',
+                          '-ex', 'set pagination off', '-ex', 'run', '-ex', 'thread apply all bt',
+                          '-ex', 'info registers', '-ex', 'info sharedlibrary', '--args', *args]
+              return original(args, *positional, **options)
+          subprocess.Popen = diagnostic
+          sys.argv = [str(path), '--full', '--software-renderer', '--local-media']
+          raise SystemExit(module.main())
+          '@ | python - > cache/diagnostic-report.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: native-diagnosis
+          path: |
+            cache/diagnostic-report.json
+            cache/MPV/portable_config/cache/menu-rework/
+          if-no-files-found: error
+          retention-days: 7

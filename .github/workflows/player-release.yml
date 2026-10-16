@@ -95,14 +95,7 @@ jobs:
         run: python tools/release.py check --player cache/release-stage/MPV --evidence cache/release-evidence
       - name: Verify full menus and subtitle controls with software D3D11
         shell: pwsh
-        run: |
-          # The device menu exercises WASAPI notifications even with --ao=null.
-          # Hosted Windows runners may leave the audio services stopped.
-          Get-Service AudioEndpointBuilder,Audiosrv | Format-Table Name,Status,StartType
-          Start-Service AudioEndpointBuilder
-          Start-Service Audiosrv
-          Get-Service AudioEndpointBuilder,Audiosrv | Format-Table Name,Status,StartType
-          python cache/release-stage/MPV/portable_config/tools/test_menu_ui.py --full --software-renderer --local-media > cache/release-menu-report.json
+        run: python cache/release-stage/MPV/portable_config/tools/test_menu_ui.py --full --software-renderer --local-media > cache/release-menu-report.json
       - name: Archive verified candidate
         shell: pwsh
         run: python tools/release.py archive --player cache/release-stage/MPV --report cache/release-evidence/report.json --menu-report cache/release-menu-report.json --output cache/release-assets
