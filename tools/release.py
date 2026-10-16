@@ -133,7 +133,15 @@ def load_plan(path):
     expected = f'player-{plan["mpv_tag"]}-r{plan["build"]["revision"]}'
     if plan['tag'] != expected or plan['repository'] != plan['build']['repository']:
         raise ValueError('Inconsistent release identity')
+    selected_backports(plan)
     return plan
+
+
+def selected_backports(plan):
+    commits = plan['build'].get('mpv_backports', {}).get(plan['mpv_tag'], [])
+    if not isinstance(commits, list) or any(not isinstance(commit, str) or not SHA.fullmatch(commit) for commit in commits):
+        raise ValueError('Backports must be immutable upstream commits')
+    return commits
 
 
 def hash_file(path):
@@ -359,6 +367,9 @@ def archive_release(args):
              'Automated checks cover CPU playback, script startup, next-file/reset and native command parsing. '
              'GPU rendering, VS output, AI inference and fresh-machine portability require acceptance before stable promotion.\n\n'
              'Optional components are versioned separately. This candidate does not claim a complete offline AI/VS installation.\n')
+    if selected_backports(plan):
+        notes += '\nUpstream compatibility backports (included in mpv-source.patch):\n' + ''.join(
+            f'- [{commit[:7]}](https://github.com/mpv-player/mpv/commit/{commit})\n' for commit in selected_backports(plan))
     (output / 'release-notes.md').write_text(notes, encoding='utf-8')
     print('Created: ' + str(target))
 

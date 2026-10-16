@@ -29,8 +29,23 @@ checkout_source mpv-player/mpv "$(read_field mpv_commit)" "$work/mpv-source"
 checkout_source vapoursynth/vapoursynth "$(read_build_field vapoursynth_headers_commit)" "$work/vs-headers"
 checkout_source lunarmodules/luasocket "$(read_build_field luasocket_commit)" "$work/luasocket"
 
-# On Windows mpv loads VSScript.dll dynamically. Headers and pkg-config metadata
-# enable that interface without installing a second Python/VS runtime into base.
+# Stable 0.41 links VSScript directly. Backport the pinned upstream dynamic-loader
+# fixes only to the explicitly listed release; newer tags use their own source.
+while IFS= read -r backport; do
+    [[ $backport =~ ^[0-9a-f]{40}$ ]]
+    git -C "$work/mpv-source" fetch --depth=2 origin "$backport"
+    git -C "$work/mpv-source" diff "$backport^" "$backport" > "$work/$backport.patch"
+    git -C "$work/mpv-source" apply --check "$work/$backport.patch"
+    git -C "$work/mpv-source" apply "$work/$backport.patch"
+done < <(python - "$plan" <<'PY'
+import sys
+sys.path.insert(0, 'tools')
+from release import load_plan, selected_backports
+sys.stdout.write(''.join(commit + '\n' for commit in selected_backports(load_plan(sys.argv[1]))))
+PY
+)
+
+# The patched Windows interface loads VSScript.dll only when the filter starts.
 mkdir -p "$work/pkgconfig"
 headers_include=$(cygpath -m "$work/vs-headers/include")
 for module in vapoursynth vapoursynth-script; do
@@ -65,6 +80,7 @@ for module in http url tp ftp headers smtp; do
 done
 cp "$work/luasocket/LICENSE" "$work/runtime/licenses/LuaSocket-LICENSE"
 cp "$work/mpv-source/LICENSE.GPL" "$work/mpv-source/LICENSE.LGPL" "$work/runtime/licenses/"
+git -C "$work/mpv-source" diff --binary > "$work/runtime/mpv-source.patch"
 cp -r "$MINGW_PREFIX/share/licenses" "$work/runtime/licenses/msys2"
 pacman -Q > "$work/runtime/msys2-packages.txt"
 

@@ -165,6 +165,18 @@ class ReleaseChecks(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'uncommitted'):
                 release.load_plan(path)
 
+    def test_backports_are_scoped_to_the_exact_stable_tag(self):
+        plan = sample_plan()
+        self.assertTrue(release.selected_backports(plan))
+        plan['mpv_tag'] = 'v0.42.0'
+        self.assertEqual(release.selected_backports(plan), [])
+
+    def test_backports_reject_mutable_refs(self):
+        plan = sample_plan()
+        plan['build']['mpv_backports'] = {'v0.41.0': ['master']}
+        with self.assertRaisesRegex(ValueError, 'immutable'):
+            release.selected_backports(plan)
+
     def test_missing_log_fails_and_keeps_failure_report(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
