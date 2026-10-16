@@ -183,6 +183,9 @@ local function write_report(ok, message)
     file:write(utils.format_json({ok = ok, checks = checks, completed = completed, error = message})); file:close()
 end
 local function tick()
+    -- CI may still be initializing other scripts or the renderer after one second.
+    -- Menu availability assertions require actual media and configured video output.
+    if loaded == 0 or not get('video-out-params') then return end
     local item = steps[step]
     if not item then
         write_report(true)
@@ -199,4 +202,7 @@ mp.add_timeout(1, function()
         if not ok then pcall(write_report, false, tostring(message)); mp.msg.error('MENU UI FAIL: ' .. tostring(message)); mp.commandv('quit', '3') end
     end)
 end)
-mp.add_timeout(100, function() pcall(write_report, false, 'overall timeout'); mp.commandv('quit', '4') end)
+mp.add_timeout(100, function()
+    pcall(write_report, false, 'overall timeout; loaded=' .. loaded .. ', video=' .. tostring(get('video-out-params') ~= nil))
+    mp.commandv('quit', '4')
+end)
