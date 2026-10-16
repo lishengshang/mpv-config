@@ -4,6 +4,7 @@
   "revision": 1,
   "mpv_repository": "mpv-player/mpv",
   "msys2_environment": "UCRT64",
+  "lua_runtime": "luajit",
   "mpv_backports": {
     "v0.41.0": [
       "75b2ccfeb1ce4ed5a40ac9860fa74f3d1265e13f",

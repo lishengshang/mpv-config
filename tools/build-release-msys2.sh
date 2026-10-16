@@ -76,7 +76,7 @@ cp "$work/mpv-build/mpv.exe" "$work/mpv-build/mpv.com" "$work/runtime/"
 cp "$work/mpv-source/etc/mpv-register.bat" "$work/mpv-source/etc/mpv-unregister.bat" "$work/runtime/"
 cp "$MINGW_PREFIX/bin/ffmpeg.exe" "$MINGW_PREFIX/bin/ffprobe.exe" "$work/runtime/"
 make -C "$work/luasocket/src" mingw LUAV=5.1 \
-    LUAINC_mingw="$MINGW_PREFIX/include/lua5.1" LUALIB_mingw="$MINGW_PREFIX/bin/lua51.dll"
+    LUAINC_mingw="$(pkg-config --variable=includedir luajit)" LUALIB_mingw="$MINGW_PREFIX/bin/lua51.dll"
 cp "$work/luasocket/src/socket-3.0.0.dll" "$work/runtime/socket/core.dll"
 cp "$work/luasocket/src/mime-1.0.3.dll" "$work/runtime/mime/core.dll"
 cp "$work/luasocket/src/"{ltn12,mime,socket}.lua "$work/runtime/lua/"

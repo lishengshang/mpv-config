@@ -51,7 +51,7 @@ CI 运行配置接线、字幕适配、GPU 依赖探针和验收工具失败判�
 
 `release/manifest.json` 管理配置修订、构建依赖提交和必需能力。版本名为 `player-v0.41.0-r1`：mpv 官方 tag 与本项目配置修订独立；同一个 mpv 版本下发布配置修复时增加 `revision`。已公开的资产拒绝覆盖，上传失败只留下草稿，同源重跑可补齐草稿。预发布始终 `latest=false`，正式用户继续使用已验收版本。
 
-Windows 构建参考 mpv 自身 MSYS2 CI，采用仍提供 mujs/rubberband 的 UCRT64 环境，固定 mpv tag 解析后的源码提交，显式启用 Lua、JavaScript、D3D11、VapourSynth 等；VS 只安装固定提交的头文件，实际 Python/VS 运行时另行分发。LuaSocket 从固定提交构建并与播放器共用 Lua 5.1，WebUI 从播放器目录解析模块，不依赖进程当前目录。依赖的 MSYS2 二进制包在构建时解析，版本记录于包内 `msys2-packages.txt`；这不是所有依赖完全锁定的逐字节可复现构建。
+Windows 构建参考 mpv 自身 MSYS2 CI，采用仍提供 mujs/rubberband 的 UCRT64 环境，固定 mpv tag 解析后的源码提交，显式启用 LuaJIT、JavaScript、D3D11、VapourSynth 等；VS 只安装固定提交的头文件，实际 Python/VS 运行时另行分发。文件浏览器排序需要 `ffi`，弹幕解压需要位运算，因此使用 LuaJIT，不能只检查 Lua 5.1 ABI。LuaSocket 从固定提交构建并与播放器共用 LuaJIT 的头文件和 `lua51.dll`；WebUI 从播放器目录解析模块，不依赖进程当前目录。依赖的 MSYS2 二进制包在构建时解析，版本记录于包内 `msys2-packages.txt`；这不是所有依赖完全锁定的逐字节可复现构建。
 
 `v0.41.0` 原源码直接链接 VSScript；为让 VS 保持可选组件，单独回移上游动态加载修复 `75b2ccf` 和兼容旧 VS 的 `44a9b03`。完整提交固定在清单的 `mpv_backports`，只对明确列出的 tag 应用；补丁检查失败即停止，不自动猜测适用版本。包内附 `mpv-source.patch`，Release 说明列出补丁来源；这是基于正式源码的本项目构建。其他正式 tag 默认使用自身实现。
 

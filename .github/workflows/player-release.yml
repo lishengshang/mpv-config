@@ -75,7 +75,7 @@ jobs:
           install: git make
           pacboy: >-
             cc:p ffmpeg:p libplacebo:p libass:p lcms2:p libarchive:p
-            libbluray:p libdvdnav:p lua51:p mujs:p meson:p ninja:p pkgconf:p
+            libbluray:p libdvdnav:p luajit:p mujs:p meson:p ninja:p pkgconf:p
             python:p rubberband:p shaderc:p spirv-cross:p uchardet:p vulkan-devel:p
       - name: Build official source with required features
         shell: msys2 {0}
