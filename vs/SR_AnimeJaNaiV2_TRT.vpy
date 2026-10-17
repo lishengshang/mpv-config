@@ -29,7 +29,7 @@ Lk_Fmt = False
 ## <True|False> 是否为fp32模型使用fp16量化
 ## 使用的显卡序号，0为排序一号
 ## <1|2|3> 使用的显卡线程数
-## <True|False> 是否使用静态引擎，否则为动态
+## <True|False> 是否使用静态引擎，否则为动态（任一边小于 384 时自动改用静态引擎）
 ## 动态引擎的优化源分辨率（高度不大于 H_Pre）
 ## 动态引擎的最大支持源分辨率
 ## <0~1024> 整数，约束显存（MiB），最小值为128，设为低于此数的值即为不限制
@@ -38,7 +38,9 @@ Lk_Fmt = False
 
 ret = k7f.FMT_CTRL(clip, h_max=1200, h_ret=True)
 clip = k7f.FMT_CTRL(clip, h_max=H_Pre, fmt_pix=1 if Lk_Fmt else 0)
-clip = k7f.UAI_NV_TRT(clip, crc=False, model_pth=Model, opt_lv=3, cuda_opt=[0, 0, 0], int8_qnt=False, fp16_qnt=Fp16_Qnt, gpu=Gpu, gpu_t=Gpu_T, st_eng=St_Eng, res_opt=Res_Opt, res_max=Res_Max, ws_size=Ws_Size)
+# 动态 UAI 引擎的 min_shapes=[384, 384]；低于该下限时用精确尺寸的静态引擎，绕开无匹配优化档。
+effective_static = St_Eng or clip.width < 384 or clip.height < 384
+clip = k7f.UAI_NV_TRT(clip, crc=False, model_pth=Model, opt_lv=3, cuda_opt=[0, 0, 0], int8_qnt=False, fp16_qnt=Fp16_Qnt, gpu=Gpu, gpu_t=Gpu_T, st_eng=effective_static, res_opt=Res_Opt, res_max=Res_Max, ws_size=Ws_Size)
 clip = k7f.FMT_CTRL(clip, h_max=H_Max, fmt_pix=1 if Lk_Fmt else 0)
 
 clip.set_output()

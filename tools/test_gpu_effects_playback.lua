@@ -59,8 +59,14 @@ else
     end, function() return active('') end)
     add(function()
         check(#mp.get_property_native('vf', {}) == 1, 'reset preserves unrelated VF')
-        mp.commandv('keypress', '$')
-    end, function() return active('MEMC_RIFE_TRT') end)
+        send('toggle', 'NR_BILATERAL_CUDA')
+    end, function() return active('NR_BILATERAL_CUDA') and #mp.get_property_native('vf', {}) == 2 end)
+    add(function() send('compare') end, function()
+        return active('') and status().compare == 'NR_BILATERAL_CUDA' and #mp.get_property_native('vf', {}) == 2
+    end)
+    add(function() shot('compare-suspended'); send('compare') end, function() return active('NR_BILATERAL_CUDA') end)
+    add(function() shot('compare-resumed'); send('reset') end, function() return active('') end)
+    add(function() mp.commandv('keypress', '$') end, function() return active('MEMC_RIFE_TRT') end)
     add(function() shot('rife'); mp.commandv('keypress', 'ALT+~') end,
         function() return active('') and #mp.get_property_native('vf', {}) == 0 end)
     add(function() mp.commandv('keypress', '$') end, function() return active('MEMC_RIFE_TRT') end)

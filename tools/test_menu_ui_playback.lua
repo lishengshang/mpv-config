@@ -133,7 +133,7 @@ add('subtitle visible and size', function() open('字幕 > 次字幕调整') end
 add('secondary font adjustment', function() choose('字幕 > 次字幕调整', '次字幕字号 +0.1') end,
     function() return mp.get_property_number('secondary-sub-scale') > 1 and kind() == 'menu-ui' end)
 add('main screenshot after subtitles', function() shot('subtitles'); open('画质增强') end, function() return kind() == 'menu-ui' end)
-add('GPU menu handoff', function() choose('画质增强', 'GPU 增强…') end, function() return kind() == 'gpu-effects' end)
+add('GPU menu handoff', function() choose('画质增强', '画面增强…') end, function() return kind() == 'gpu-effects' end)
 add('return from GPU', function() mp.commandv('script-binding', 'uosc/menu-blurred') end, function() return kind() == 'menu-ui' end)
 add('continuous screenshot', function() close() end, function() return kind() == nil end)
 add('start continuous keyboard', function() mp.commandv('keypress', 'ALT+s') end,

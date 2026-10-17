@@ -9,9 +9,9 @@
 | 键位 | 文件（省略 `.vpy`） | 模型/算法 | 后端 | 模型倍率/用途 |
 | --- | --- | --- | --- | --- |
 | `$` | `MEMC_RIFE_TRT` | RIFE 4.26 | TRT | 补帧 |
-| `%` | `MEMC_DRBA_TRT` | distilDRBA v1 | TRT | 动画补帧候选 |
+| `%` | `MEMC_DRBA_TRT` | distilDRBA v2_lite | TRT | 动画补帧候选 |
 | `@` | `MEMC_RIFE_DML` | RIFE 4.26 | DML | 补帧后端对照 |
-| `SHARP`（`#`） | `MEMC_DRBA_DML` | distilDRBA v1 | DML | 补帧后端对照 |
+| `SHARP`（`#`） | `MEMC_DRBA_DML` | distilDRBA v2_lite | DML | 补帧后端对照 |
 | `&` | `SR_ARTCNN_TRT` | ArtCNN R8F64 | TRT | 2×，bilinear 色度 |
 | `ALT+&` | `SR_ARTCNN_CHROMA_TRT` | R8F64 + Chroma | TRT | 2×，4:2:0 BT.709 色度重建 |
 | `*` | `SR_AnimeJaNaiV3_TRT` | V3L1 sharp HD | TRT | 2×，动画锐化取向 |
@@ -38,7 +38,7 @@ TRT/DML 对照共用模型；倍率是模型倍率，实际尺寸受 `H_Pre` / `
 | `the_database_AnimeJaNaiV2L1_x2_fp16_op17.onnx` | AnimeJaNai V2 TRT/DML | 同上 |
 | `Phhofm_HFA2kCompact_x2_fp16_op17.onnx` | HFA2k | [phhofm/models](https://github.com/phhofm/models) |
 | `Zarxrax_Anime1080Fixer_SUC_x1_fp16_op17.onnx` | Anime1080Fixer | Zarxrax（Hugging Face） |
-| RIFE 4.26 / 4.25lite、distilDRBA v1 | MEMC、MIX | 匹配的 vs-mlrt 模型包 |
+| RIFE 4.26 / 4.25lite、distilDRBA v2_lite | MEMC、MIX | 匹配的 vs-mlrt 模型包 |
 
 当前 vsmlrt ArtCNN 枚举：6=R16F96、7=R8F64、8=R8F64_DS、9=R8F64_Chroma、17=R8F64_Chroma_DN。切模型前核对安装版本与实际模型文件，不仅修改编号。
 
@@ -47,5 +47,5 @@ TRT/DML 对照共用模型；倍率是模型倍率，实际尺寸受 `H_Pre` / `
 - `NR_BM3D_CUDA` 调用的函数名虽为 `BM3D_NV`，实际插件是 `bm3dcuda_rtc`；文件后缀按后端命名。
 - Chroma 预设直接调 `vsmlrt.ArtCNN`，因为 k7sfunc 1.8.1 的 `ARTCNN_NV` 仅接受 6/7/8；4:2:0 BT.709 色度先 bilinear 放大，不在更新时改回普通 ArtCNN 调用。
 - 首次 TRT 构建及换尺寸/模型可能较慢；缺模型、DLL 不匹配和驱动不足均需实际产帧检查，不能只看导入成功。
-- ArtCNN 普通、Chroma 与 MIX 预设在格式预处理后任一边小于 384 像素时使用静态 TRT 引擎，绕开 k7sfunc 1.8.1 动态引擎的 `min_shapes=[384,384]`。模型、缩放和个人参数不变；首次遇到小尺寸可能新建引擎，符合范围的源仍按原设置运行。
+- ArtCNN 普通、Chroma、MIX 以及 UAI 类预设（AnimeJaNai V2/V3、HFA2k、Anime1080Fixer）在格式预处理后任一边小于 384 像素时改用静态 TRT 引擎，绕开 k7sfunc 1.8.1 动态引擎的 `min_shapes=[384,384]`；否则 TRT 报 `no valid optimization profile found`。模型、缩放和个人参数不变；首次遇到小尺寸可能新建引擎，符合范围的源仍按原设置运行。
 - 驱动/运行时更新后执行 `tools/verify-gpu.ps1 -Run`；小尺寸产帧检查加 `-SourceWidth 640`。仓库外旧检查批处理仅作辅助。

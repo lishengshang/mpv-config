@@ -27,7 +27,7 @@ PS：自行编辑文本时使用 UTF-8、LF；脚本选项的注释单独占行�
 ### 脚本着色器说明
 
 - **菜单与键位**：右键打开 uosc 主菜单，与底部菜单按钮共用入口；完整键位与菜单项见 [input.conf](input.conf)。
-- **GPU 增强**：菜单“画质增强 → GPU 增强”；安装、恢复与限制见 [GPU 快速上手](docs/gpu-setup.md)，VS 预设及模型对应见 [vs/README.md](vs/README.md)。
+- **GPU 增强**：菜单“画质增强 → 画面增强”（按需求分组，模型名在后一层）；安装、对比与恢复、限制见 [GPU 快速上手](docs/gpu-setup.md)，VS 预设及模型对应见 [vs/README.md](vs/README.md)。
 - **AI 字幕**：`Alt+f` 或菜单“字幕 → 下载／生成”，默认 Whisper，可选 Qwen；管理、重新生成、缓存与导出见 [AI 字幕](docs/ai-subtitles.md)。
 - **HDR 与蓝光 ISO**：`toggleHDR` 按视频类型自动切换 Windows HDR 显示模式并在播放结束后恢复，需 [HDRTray](https://github.com/res2k/HDRTray/releases) 的 `HDRCmd.exe`，路径写在 `local.conf`（模板见 [local.conf.example](local.conf.example)），未配置则不接管；`auto_bluray` 把拖入或命令行传入的 `.iso` 改走 `bd://` 播放，只认扩展名、不处理 BDMV 文件夹，非蓝光 ISO 会打开失败。
 - **维护与诊断**：菜单“工具与高级 → 维护”，提供脚本与着色器更新预览、组件诊断和播放采样；操作与结果解释见 [配置检查](docs/config-checks.md)。
