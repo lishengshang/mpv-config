@@ -988,6 +988,12 @@ local function process_audio_segment(segment_audio_file, subtitle_count)
     return subtitle_count, temp_srt, data == '' or subtitle_cache.valid_srt(data)
 end
 
+-- Progressive display: the first slice stays short so subtitles appear quickly,
+-- then later slices grow to cut per-slice model reloads. These constants do not
+-- change the configured value, so the subtitle cache identity stays stable.
+local FIRST_SEGMENT_SECONDS = 15
+local LATER_SEGMENT_SECONDS = 40
+
 local function process_video_incrementally(video_path, srt_file, segment_duration)
     local start_time = 0
     local subtitle_count = 1
@@ -1000,8 +1006,14 @@ local function process_video_incrementally(video_path, srt_file, segment_duratio
         if start_time >= file_duration then
             break
         end
-        if start_time + segment_duration > file_duration then
-            segment_duration = file_duration - start_time
+        local slice
+        if segment_index == 1 then
+            slice = math.min(segment_duration, FIRST_SEGMENT_SECONDS)
+        else
+            slice = math.max(segment_duration, LATER_SEGMENT_SECONDS)
+        end
+        if start_time + slice > file_duration then
+            slice = file_duration - start_time
         end
 
         local segment_audio_file = utils.join_path(temp_path, "whisper-" .. pid .. ".wav")
@@ -1016,7 +1028,7 @@ local function process_video_incrementally(video_path, srt_file, segment_duratio
         local start_time_str = string.format("%02d:%02d:%02d", math.floor(start_time / 3600), math.floor(start_time / 60) % 60, start_time % 60)
         msg.verbose(string.format("Extracting segment: %d, Start Time: %s", segment_index, start_time_str))
 
-        local success = extract_audio_segment(video_path, segment_audio_file, start_time_str, segment_duration)
+        local success = extract_audio_segment(video_path, segment_audio_file, start_time_str, slice)
         if not success or not file_exists(segment_audio_file) then
             msg.verbose("Audio extraction completed or failed.")
             return false
@@ -1038,7 +1050,7 @@ local function process_video_incrementally(video_path, srt_file, segment_duratio
             end
         end
 
-        start_time = start_time + segment_duration
+        start_time = start_time + slice
         segment_index = segment_index + 1
     end
     return true
