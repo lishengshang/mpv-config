@@ -13,6 +13,7 @@ local options = require "mp.options"
 package.path = mp.command_native({'expand-path', '~~/script-modules/?.lua'}) .. ';' .. package.path
 local subtitle_cache = require 'ai-subtitle-cache'
 local subtitle_layout = require 'ai-subtitle-layout'
+local translation_queue = require 'ai-translation-job'
 
 ---- Script Options ----
 local o = {
@@ -65,6 +66,10 @@ local o = {
     -- Rate per minute used by the API
     -- See the corresponding API documentation for instructions
     api_rate = 15,
+    translation_max_requests = 20,
+    translation_max_chars = 20000,
+    translation_retries = 2,
+    translation_retry_base = 2,
     -- Translation target language
     translate = "Chinese",
     -- Specify the font to be used for the generated ass captions
@@ -106,19 +111,17 @@ local function later(seconds, callback)
     return timer
 end
 
-local start_index = 1
 local subtitle_count = 1
 local append_subtitle_count = 1
-local in_progress_batches = 0
-local translated_batches_count = 0
-local translation_source
+local translation_job
+local translation_path
+local translation_cached
+local translation_migrations = {}
 local subtitles_written = false
 local whisper_running = false
 local gpt_api_enabled = false
 local state = {}
 local time_ranges = {}
-local progress_cache = {}
-local translated_cache = {}
 local management_menu
 local generate_ass
 
@@ -184,17 +187,16 @@ local function current_entry(extra)
     -- URLs may contain credentials; only their hash is persisted.
     local source = protocol and ('url:' .. subtitle_cache.digest(path)) or path
     if is_windows and not protocol then source = source:gsub('\\', '/'):lower() end
-    local identity = utils.format_json({'asr-cache-v1', source,
+    local identity = utils.format_json({'asr-cache-v2', source,
         tostring(info.size or ''), tostring(info.mtime or ''),
         tostring(mp.get_property_native('aid', 'auto')), fast_whisper_path,
         tostring(backend.size or ''), tostring(backend.mtime or ''),
         o.model, o.device, o.compute_type, o.language, tostring(o.use_segment),
         tostring(o.segment_duration), tostring(o.max_line_width),
-        o.translate, o.api_mode, subtitle_cache.digest(o.api_url),
-        tostring(o.api_temperature), o.font_name, extra or ''})
+        extra or ''})
     if selected_backend == 'qwen' then
-        -- Keep existing Whisper identities unchanged; Qwen has an independent namespace.
-        identity = utils.format_json({'qwen-asr-cache-v1', source,
+        -- Qwen has an independent recognition namespace; translator/style settings stay separate.
+        identity = utils.format_json({'qwen-asr-cache-v2', source,
             tostring(info.size or ''), tostring(info.mtime or ''),
             tostring(mp.get_property_native('aid', 'auto')), qwen_python, qwen_model, qwen_aligner,
             subtitle_cache.digest(subtitle_cache.read(qwen_model .. '/revision.json') or
@@ -203,20 +205,49 @@ local function current_entry(extra)
                 subtitle_cache.read(qwen_aligner .. '/config.json') or ''),
             subtitle_cache.digest(subtitle_cache.read(qwen_runner) or ''),
             'cuda:bfloat16:sdpa', o.language, tostring(o.qwen_chunk_seconds), tostring(o.max_line_width),
-            o.translate, o.api_mode, subtitle_cache.digest(o.api_url),
-            tostring(o.api_temperature), o.font_name, extra or ''})
+            extra or ''})
     elseif o.use_segment and o.segment_silence then
         -- Keep whole/fixed-slice identities intact; silence slicing has its own result.
-        identity = utils.format_json({'whisper-silence-v1', identity})
+        identity = utils.format_json({'whisper-silence-v2', identity})
     end
     return subtitle_cache.entry(cache_root, identity)
+end
+
+local function translation_paths(source)
+    local data = subtitle_cache.read(source)
+    if not subtitle_cache.valid_srt(data) then return nil end
+    local identity = utils.format_json({'translation-v1', subtitle_cache.digest(data), o.translate,
+        o.api_mode, subtitle_cache.digest(o.api_url), tostring(o.api_temperature)})
+    local dir = utils.join_path(utils.split_path(source), 'translations/' .. subtitle_cache.digest(identity))
+    local item = {dir = dir, identity = identity, srt = utils.join_path(dir, 'subtitles.translate.srt'),
+        ass = utils.join_path(dir, 'subtitles.' .. o.translate .. '.ass'), progress = utils.join_path(dir, 'progress.json')}
+    if not translation_migrations[dir] then
+        translation_migrations[dir] = true
+        local meta = utils.parse_json(subtitle_cache.read(utils.join_path(utils.split_path(source), 'complete.json')) or '')
+        for _, old in ipairs(meta and subtitle_cache.legacy_candidates(cache_root, meta.identity) or {}) do
+            local fields = utils.parse_json(old.identity)
+            if fields and fields[1] == 'whisper-silence-v1' then fields = utils.parse_json(fields[2]) end
+            local previous = old.srt:gsub('%.srt$', '.translate.srt')
+            local words = subtitle_cache.read(previous)
+            if fields and fields[16] == o.translate and fields[17] == o.api_mode and
+                fields[18] == subtitle_cache.digest(o.api_url) and fields[19] == tostring(o.api_temperature) and
+                subtitle_cache.read(old.srt) == data and subtitle_cache.valid_srt(words) and
+                subtitle_cache.read(previous .. '.complete') == subtitle_cache.digest(words) and subtitle_cache.mkdir(dir) then
+                if subtitle_cache.write(item.srt, words) then subtitle_cache.write(item.srt .. '.complete', subtitle_cache.digest(words)) end
+                break
+            end
+        end
+    end
+    return item
 end
 
 local function publish_status()
     local entry = current_entry()
     local cached = entry and subtitle_cache.lookup(entry) ~= nil or false
     mp.set_property_native('user-data/ai-subtitles/status', {backend = selected_backend,
-        running = whisper_running, cached = cached, media = entry ~= nil})
+        running = whisper_running or (translation_job and (translation_job.state == 'running' or
+            translation_job.state == 'waiting' or translation_job.state == 'retrying')) or false,
+        cached = cached, media = entry ~= nil, translation = translation_job and translation_job.snapshot() or translation_cached})
     if management_menu and mp.get_property_native('user-data/uosc/menu/type') == 'ai-subtitle-manager' then
         mp.commandv('script-message-to', 'uosc', 'update-menu', utils.format_json(management_menu()))
     end
@@ -230,51 +261,6 @@ local function begin_work(entry)
     output_path, temp_path = work, work
     subtitles_file = utils.join_path(work, 'incremental.srt')
     return true
-end
-
-local function is_text_identical(text1, text2)
-    local function normalize_text(text)
-        text = text:gsub("，", ",")
-                  :gsub("。", ".")
-                  :gsub("！", "!")
-                  :gsub("？", "?")
-                  :gsub("；", ";")
-                  :gsub("：", ":")
-                  :gsub("“", "\"")
-                  :gsub("”", "\"")
-                  :gsub("‘", "'")
-                  :gsub("’", "'")
-                  :gsub("（", "(")
-                  :gsub("）", ")")
-                  :gsub("【", "[")
-                  :gsub("】", "]")
-                  :gsub("《", "<")
-                  :gsub("》", ">")
-                  :gsub("、", "/")
-                  :gsub("～", "~")
-
-        text = text:gsub("[%p%s]", "")
-        text = text:lower()
-        return text
-    end
-
-    local clean_text1 = normalize_text(text1)
-    local clean_text2 = normalize_text(text2)
-    return clean_text1 == clean_text2
-end
-
-local function format_time(time_str)
-    local h, m, s, ms = nil, nil, nil, nil
-    if time_str:match("^%d+:%d+:%d+[%.:]%d+$") then
-        h, m, s, ms = time_str:match("(%d+):(%d+):(%d+)[%.:](%d+)")
-    elseif time_str:match("^%d+:%d+[%.:]%d+$") then
-        h = 0
-        m, s, ms = time_str:match("(%d+):(%d+)[%.:](%d+)")
-    else
-        return time_str
-    end
-
-    return string.format("%02d:%02d:%02d,%03d", h, m, s, ms)
 end
 
 local function timestamp_to_seconds(timestamp)
@@ -298,6 +284,9 @@ local function get_current_sub()
             if file:lower():match('%.srt$') then return file end
             local root = normalize(cache_root):gsub('\\', '/'):lower():gsub('/+$', '') .. '/'
             if normalize(file):gsub('\\', '/'):lower():sub(1, #root) == root then
+                local mapped = subtitle_cache.read(file .. '.source')
+                if mapped and normalize(mapped):gsub('\\', '/'):lower():sub(1, #root) == root and
+                    subtitle_cache.valid_srt(subtitle_cache.read(mapped)) then return mapped end
                 for _, suffix in ipairs({'.ai.ass', '.' .. o.translate .. '.ass'}) do
                     if file:sub(-#suffix) == suffix then
                         local source = file:sub(1, -#suffix - 1) .. '.srt'
@@ -358,16 +347,21 @@ end
 
 local function load_cached(entry, auto)
     if is_protocol(mp.get_property('path')) then return false end
-    if not entry or not subtitle_cache.lookup(entry) then return false end
+    if not entry or not subtitle_cache.lookup_recognition(entry, cache_root) then return false end
     active_entry, subtitles_file = entry, entry.srt
     -- Auto-add preserves an existing subtitle, but otherwise the cached subtitle should be visible.
     if auto and mp.get_property('sid', 'no') == 'no' then auto = false end
     append_sub(entry.srt, auto)
-    local translated = entry.srt:gsub('%.srt$', '.translate.srt')
-    local translation = subtitle_cache.read(translated)
-    if translation and subtitle_cache.valid_srt(translation) and
-        subtitle_cache.read(translated .. '.complete') == subtitle_cache.digest(translation) then
-        generate_ass(entry.srt, auto)
+    local item = translation_paths(entry.srt)
+    local translated = item and subtitle_cache.read(item.srt)
+    if item and subtitle_cache.valid_srt(translated) and
+        subtitle_cache.read(item.srt .. '.complete') == subtitle_cache.digest(translated) then
+        local saved = utils.parse_json(subtitle_cache.read(item.progress) or '')
+        translation_cached = saved and saved.job or {requests = 0, input_chars = 0, tokens = 0}
+        translation_cached.state, translation_cached.message = 'completed', '已复用完成译文'
+        translation_cached.done = #(subtitle_layout.parse(subtitle_cache.read(entry.srt)) or {})
+        translation_cached.total = translation_cached.done
+        generate_ass(entry.srt, auto, item)
     end
     msg.info('AI subtitle cache reused: ' .. entry.key)
     publish_status()
@@ -405,6 +399,8 @@ local function cleanup_work(work)
 end
 
 local function reset_session()
+    if translation_job then translation_job.cancel(); translation_job = nil; translation_path = nil end
+    translation_cached = nil
     generation = generation + 1
     if recognition_job then mp.abort_async_command(recognition_job); recognition_job = nil end
     for id in pairs(pending_jobs) do mp.abort_async_command(id) end
@@ -423,38 +419,9 @@ local function reset_session()
     cleanup_work(active_work)
     active_entry, active_work, subtitles_file = nil, nil, nil
     whisper_running, subtitles_written, gpt_api_enabled = false, false, false
-    start_index, in_progress_batches, translated_batches_count = 1, 0, 0
-    translation_source = nil
-    time_ranges, progress_cache, translated_cache, state = {}, {}, {}, {}
+    time_ranges, state = {}, {}
     mp.set_osd_ass(0, 0, '')
     publish_status()
-end
-
-local function parse_sub(filename)
-    local subtitles = {}
-    local file = io.open(filename, "r")
-    if not file then return nil end
-
-    local index, start_time, end_time, text
-    for line in file:lines() do
-        line = line:gsub("[\r\n]+", "")
-        if line:match("^%d+$") then
-            index = tonumber(line)
-        elseif line:match("^%d%d:%d%d:%d%d,%d%d%d%s%-%->%s%d%d:%d%d:%d%d,%d%d%d$") then
-            start_time, end_time = line:match("^(%d%d:%d%d:%d%d,%d%d%d)%s%-%->%s(%d%d:%d%d:%d%d,%d%d%d)$")
-            start_time = start_time:gsub(",", "."):sub(1, -2)
-            end_time = end_time:gsub(",", "."):sub(1, -2)
-        elseif line:match("^%s*$") then
-            if index and start_time and end_time and text then
-                table.insert(subtitles, {index = index, start_time = start_time, end_time = end_time, text = text})
-            end
-            index, start_time, end_time, text = nil, nil, nil, nil
-        else
-            text = (text and text .. "\n" or "") .. line
-        end
-    end
-    file:close()
-    return subtitles
 end
 
 local function shift_subtitle_timestamps(temp_srt, srt_file, subtitle_count, start_time, duration)
@@ -523,55 +490,11 @@ local function shift_subtitle_timestamps(temp_srt, srt_file, subtitle_count, sta
 end
 
 -- Merge two subtitles
-local function merge_subtitles(sub1, sub2)
-    local merged = {}
-    local used1, used2 = {}, {}
-
-    for i, s1 in ipairs(sub1) do
-        for j, s2 in ipairs(sub2) do
-            if not used1[i] and not used2[j] and s1.start_time == s2.start_time then
-                table.insert(merged, {
-                    start_time = s1.start_time,
-                    end_time = s1.end_time or s2.end_time,
-                    text = s1.text .. (s1.text ~= "" and s2.text ~= "" and "\n" or "") .. s2.text
-                })
-                used1[i] = true
-                used2[j] = true
-            end
-        end
-    end
-
-    for i, s1 in ipairs(sub1) do
-        if not used1[i] then
-            table.insert(merged, {
-                start_time = s1.start_time,
-                end_time = s1.end_time,
-                text = s1.text
-            })
-        end
-    end
-
-    for j, s2 in ipairs(sub2) do
-        if not used2[j] then
-            table.insert(merged, {
-                start_time = s2.start_time,
-                end_time = s2.end_time,
-                text = s2.text
-            })
-        end
-    end
-
-    table.sort(merged, function(a, b)
-        return a.start_time < b.start_time
-    end)
-
-    return merged
-end
-
 -- Generating ASS subtitles files
-generate_ass = function(subtitles_file, auto)
-    local translated_file = subtitles_file:gsub('%.srt$', '.translate.srt')
-    local merge_file = subtitles_file:gsub('%.srt$', '.' .. o.translate .. '.ass')
+generate_ass = function(subtitles_file, auto, item)
+    item = item or translation_paths(subtitles_file)
+    if not item then return false end
+    local translated_file, merge_file = item.srt, item.ass
     local ass, err = subtitle_layout.render(subtitle_cache.read(subtitles_file), subtitle_cache.read(translated_file), {
         scale = o.font_scale, font = o.font_name, line_width = o.layout_line_width,
         max_lines = o.layout_max_lines, max_seconds = o.layout_max_seconds})
@@ -579,309 +502,128 @@ generate_ass = function(subtitles_file, auto)
         msg.warn('AI subtitle layout failed: ' .. tostring(err or merge_file))
         return false
     end
+    subtitle_cache.write(merge_file .. '.source', subtitles_file)
     append_sub(merge_file, auto)
     return true
 end
 
 -------------Translation function----------------
 -- Call the GPT API
+local request_sequence = 0
 local function call_gpt_api(subtitles, callback)
-    if not o.api_key or o.api_key:match('^%s*$') then return nil end
-    msg.info("AI subtitle translation in progress")
-    local prompt = string.format("You are a professional translation assistant, " ..
-    "Translate the following subtitles from the original language to %s. " ..
-    "Return exactly one line per input cue, preserving its timestamp and | separator. " ..
-    "Do not add commentary, Markdown, or extra lines.", o.translate)
-
-    local request_body = {
-        messages = {
-            {
-                role = "system",
-                content = prompt
-            },
-            {
-                role = "user",
-                content = subtitles
-            }
-        },
-        model = o.api_mode,
-        temperature = o.api_temperature
-    }
-
-    local request_json = utils.format_json(request_body)
-
-    local command = {
-        "curl", "-s", "--fail-with-body", "--connect-timeout", "10", "--max-time", "60", "-X", "POST", o.api_url,
-        "-H", "Content-Type: application/json",
-        "-H", "Authorization: Bearer " .. o.api_key,
-        "-d", request_json
-    }
-    local function response_content(data)
-        local response = utils.parse_json(data or '')
-        local choice = type(response) == 'table' and type(response.choices) == 'table' and response.choices[1]
-        local content = type(choice) == 'table' and type(choice.message) == 'table' and choice.message.content
-        if type(content) == 'string' and content:match('%S') then return content end
+    if not o.api_key or o.api_key:match('^%s*$') then callback({status = 401, error = '未配置 API key'}); return function() end end
+    local dir = utils.join_path(cache_root, '_requests')
+    if not subtitle_cache.mkdir(dir) then callback({status = 400, error = '无法创建请求目录'}); return function() end end
+    request_sequence = request_sequence + 1
+    local base = utils.join_path(dir, tostring(pid) .. '-' .. generation .. '-' .. request_sequence)
+    local auth, body, headers = base .. '.auth', base .. '.json', base .. '.headers'
+    local prompt = 'Translate these subtitles into ' .. o.translate ..
+        '. Return exactly one line per input cue, preserving its timestamp and | separator. No commentary or Markdown.'
+    local payload = utils.format_json({model = o.api_mode, temperature = o.api_temperature,
+        messages = {{role = 'system', content = prompt}, {role = 'user', content = subtitles}}})
+    local function cleanup() os.remove(auth); os.remove(body); os.remove(headers) end
+    if not subtitle_cache.write(auth, 'Authorization: Bearer ' .. o.api_key .. '\nContent-Type: application/json\n') or
+        not subtitle_cache.write(body, payload) then
+        cleanup(); callback({status = 400, error = '无法保存请求参数'}); return function() end
     end
-
-    if not callback then
-        local result = mp.command_native({
-            name = "subprocess",
-            args = command,
-            capture_stdout = true,
-            capture_stderr = true,
-        })
-
-        if not result or result.status ~= 0 then
-            msg.info("API request failed: " .. tostring(result and result.stderr or "Unknown error"))
-            return nil
-        end
-
-        local content = response_content(result.stdout)
-        if content then
-            return content
-        else
-            msg.info("Unable to parse API response")
-            return nil
-        end
-    end
-
-    local abort_signal
-    local token = generation
-    abort_signal = mp.command_native_async({
-        name = "subprocess",
-        args = command,
-        capture_stdout = true,
-        capture_stderr = true,
-    }, function(success, result, error)
-        pending_jobs[abort_signal] = nil
+    msg.info('AI subtitle translation in progress')
+    local signal, token = nil, generation
+    signal = mp.command_native_async({name = 'subprocess', capture_stdout = true, capture_stderr = true,
+        args = {'curl', '-sS', '--fail-with-body', '--connect-timeout', '10', '--max-time', '60',
+            '--header', '@' .. auth, '--data-binary', '@' .. body, '--dump-header', headers,
+            '--write-out', '\nMPV_HTTP_STATUS:%{http_code}', o.api_url}}, function(ok, result)
+        pending_jobs[signal] = nil
+        local response_headers = subtitle_cache.read(headers) or ''
+        cleanup()
         if token ~= generation then return end
-        if not success or not result or result.status ~= 0 then
-            msg.info("API request failed: " .. tostring(result and result.stderr or "Unknown error"))
-            callback(nil)
-            return
-        end
-
-        local content = response_content(result.stdout)
-        if content then
-            callback(content)
-        else
-            msg.info("Unable to parse API response")
-            callback(nil)
-        end
+        result = result or {}
+        local output = result.stdout or ''
+        local status = tonumber(output:match('\nMPV_HTTP_STATUS:(%d+)%s*$')) or (ok and result.status == 0 and 200 or 0)
+        output = output:gsub('\nMPV_HTTP_STATUS:%d+%s*$', '')
+        local data = utils.parse_json(output)
+        local choice = type(data) == 'table' and type(data.choices) == 'table' and data.choices[1]
+        local text = type(choice) == 'table' and type(choice.message) == 'table' and choice.message.content
+        local usage = type(data) == 'table' and type(data.usage) == 'table' and data.usage.total_tokens
+        local retry_after = translation_queue.retry_after(response_headers:match('[Rr]etry%-[Aa]fter:%s*([^\r\n]+)'))
+        callback({status = status, text = type(text) == 'string' and text or nil,
+            tokens = tonumber(usage) or 0, retry_after = retry_after,
+            error = status == 200 and (type(text) ~= 'string' and '响应结构不符' or nil) or ('HTTP ' .. status)})
     end)
-    pending_jobs[abort_signal] = true
-
-    return function()
-        mp.abort_async_command(abort_signal)
-    end
+    pending_jobs[signal] = true
+    return function() pending_jobs[signal] = nil; mp.abort_async_command(signal); cleanup() end
 end
 
 -- Parse .srt file
-local function parse_srt(file_path)
-    local file = io.open(file_path, "r")
-    if not file then
-        msg.error("Unable to open file: " .. file_path)
-        return nil
-    end
-
-    local subtitles = {}
-    local current_entry = {}
-
-    for line in file:lines() do
-        line = line:gsub("[\r\n]+", "")
-
-        if line:match("^%d+$") then
-            if current_entry.text then
-                table.insert(subtitles, current_entry)
-            end
-            current_entry = { id = line, timestamp = nil, text = nil }
-        elseif line:match("^%d%d:%d%d:%d%d,%d%d%d%s*%-%-%>%s*%d%d:%d%d:%d%d,%d%d%d$") then
-            current_entry.timestamp = line
-        elseif line ~= "" then
-            current_entry.text = (current_entry.text and current_entry.text .. "\n" or "") .. line
-        end
-    end
-
-    if current_entry.text then
-        table.insert(subtitles, current_entry)
-    end
-
-    file:close()
-    return subtitles
-end
-
 -- Translate subtitles and write to file
-local function translate_and_write(subtitles, subtitles_file)
-    local batch_size = 20
-    local max_calls_per_minute = o.api_rate
-    local delay_between_calls = 60 / max_calls_per_minute
-    local translated_file = subtitles_file:gsub("%.srt$", ".translate.srt")
-    local total_batches = math.ceil(#subtitles / batch_size)
-    local function fail_batch(first, last, reason)
-        for i = first, last do progress_cache[subtitles[i].timestamp] = nil end
-        in_progress_batches = in_progress_batches - 1
-        msg.warn('Translation failed: ' .. reason)
-        mp.osd_message('字幕翻译失败，保留原字幕；请检查接口后重试。', 5)
+local function translate_and_write(subtitles, source, item)
+    if translation_job and translation_path == item.dir then
+        translation_job.start()
+        return
     end
-
-    -- Dynamically calculate parallelism
-    local function calculate_parallel_calls()
-        local available_time = 60
-        local required_time_per_call = delay_between_calls
-        local max_parallel_calls = math.floor(available_time / required_time_per_call)
-        return math.min(max_parallel_calls, 4)
-    end
-
-    -- Process each batch of translations in parallel
-    local function process_batch(batch_start_index)
-        -- Calculate the end index for the current batch
-        local end_index = math.min(batch_start_index + batch_size - 1, #subtitles)
-        local batch = {}
-
-        -- Combine timestamp and subtitle text
-        for i = batch_start_index, end_index do
-            local subtitle = subtitles[i]
-            -- Only process untranslated subtitles
-            if not translated_cache[subtitle.timestamp] and not progress_cache[subtitle.timestamp] then
-                table.insert(batch, subtitle.timestamp .. " | " .. subtitle.text:gsub('[\r\n]+', ' '))
-                progress_cache[subtitle.timestamp] = true  -- Mark as in translation
+    if translation_job then translation_job.cancel() end
+    if not subtitle_cache.mkdir(item.dir) then mp.osd_message('无法创建译文缓存', 5); return end
+    translation_path = item.dir
+    translation_cached = nil
+    local function serialize(values)
+        local lines, count = {}, 0
+        for _, cue in ipairs(subtitles) do
+            if values[cue.key] then
+                count = count + 1
+                lines[#lines + 1] = count .. '\n' .. cue.key .. '\n' .. values[cue.key] .. '\n\n'
             end
         end
-
-        -- Skip the batch if no new subtitles need translation
-        if #batch == 0 then
-            msg.debug("No new subtitles to translate for batch: " .. batch_start_index .. " to " .. end_index)
-            return
-        end
-
-        -- Combine the batch into a single string
-        local batch_text = table.concat(batch, "\n")
-
-        -- Call GPT API for asynchronous translation
-        local cancel = call_gpt_api(batch_text, function(translated_text)
-            -- Handle API call failure
-            if not translated_text then
-                fail_batch(batch_start_index, end_index, 'API response unavailable')
-                return
-            end
-
-            -- Split the translated text into lines
-            local translated_lines = {}
-            for line in translated_text:gmatch("[^\r\n]+") do
-                table.insert(translated_lines, line)
-            end
-
-            -- Ensure the number of translated lines matches the original batch
-            if #translated_lines ~= #batch then
-                fail_batch(batch_start_index, end_index, 'response cue count mismatch')
-                return
-            end
-
-            -- Write the translated subtitles to the file
-            local latest_content = {}
-            for i = 1, #translated_lines do
-                local translated_line = translated_lines[i]
-                local timestamp, text = translated_line:match("(%d+:%d+:%d+[%.,:]%d+%D+%d+:%d+:%d+[%.,:]%d+)%s*(.*)$")
-
-                if text then
-                    text = text:gsub("^%s*|%s*", ""):gsub("^%s*(.-)%s*$", "%1")
-                end
-
-                -- Handle translation failure
-                if not timestamp or not text or text == "" then
-                    fail_batch(batch_start_index, end_index, 'invalid translated cue')
-                    return
-                end
-
-                if timestamp and text then
-                    local text_pattern = "(%d+:%d+:%d+[%.,:]%d+)%D+(%d+:%d+:%d+[%.,:]%d+)%s*"
-                    local start_time_srt, end_time_srt = timestamp:match(text_pattern)
-
-                    if start_time_srt and end_time_srt then
-                        local start_time = format_time(start_time_srt)
-                        local end_time = format_time(end_time_srt)
-                        timestamp = start_time .. " --> " .. end_time
-                    else
-                        msg.warn("Invalid timestamp: " .. timestamp)
+        return table.concat(lines)
+    end
+    translation_job = translation_queue.new({cues = subtitles, rate = o.api_rate, retries = o.translation_retries,
+        retry_base = o.translation_retry_base, max_requests = o.translation_max_requests, max_chars = o.translation_max_chars,
+        now = function() return mp.get_time() end, wall_now = os.time, schedule = later, send = call_gpt_api,
+        publish = function(status)
+            publish_status()
+            if status.state == 'failed' or status.state == 'budget' then mp.osd_message(status.message, 6) end
+        end,
+        load = function()
+            local found = false
+            for _, path in ipairs({item.progress, item.progress .. '.pending', item.progress .. '.previous'}) do
+                local data = subtitle_cache.read(path)
+                if data then
+                    found = true
+                    local saved = utils.parse_json(data)
+                    if saved and saved.identity == item.identity and type(saved.job) == 'table' and saved.job.schema == 1 then
+                        local valid = type(saved.job.completed) == 'table'
+                        for _, name in ipairs({'requests', 'input_chars', 'tokens', 'request_allowance', 'char_allowance'}) do
+                            valid = valid and type(saved.job[name]) == 'number' and saved.job[name] >= 0
+                        end
+                        if valid then return saved.job end
                     end
-
-                    local expected = subtitles[batch_start_index + i - 1]
-                    if not expected or timestamp ~= expected.timestamp or latest_content[timestamp] then
-                        fail_batch(batch_start_index, end_index, 'response timestamps changed or reordered')
-                        return
-                    end
-                    latest_content[timestamp] = text
+                    if path == item.progress then return {invalid = true} end
                 end
             end
-
-            -- Concurrent callbacks must serialize in source order, never Lua hash order.
-            local serialized, current_index = {}, 1
-            for _, subtitle in ipairs(subtitles) do
-                local text = latest_content[subtitle.timestamp] or translated_cache[subtitle.timestamp]
-                if text then
-                    serialized[#serialized + 1] = current_index .. '\n' .. subtitle.timestamp .. '\n' .. text .. '\n\n'
-                    current_index = current_index + 1
-                end
-            end
-            if not subtitle_cache.write(translated_file, table.concat(serialized)) then
-                fail_batch(batch_start_index, end_index, 'cannot write translated subtitles')
-                return
-            end
-            for timestamp, text in pairs(latest_content) do
-                translated_cache[timestamp] = text
-                progress_cache[timestamp] = nil
-            end
-
-            -- Update translated batch count
-            translated_batches_count = translated_batches_count + 1
-            msg.info("Translated and written batch: " .. batch_start_index .. " to " .. end_index)
-            -- Add the translated subtitles
-            append_sub(translated_file)
-            generate_ass(subtitles_file)
-
-            -- Update in-progress batch count
-            in_progress_batches = in_progress_batches - 1
-
-            -- Check if all subtitles have been translated
-            if translated_batches_count == total_batches then
-                msg.info("Subtitle translation completed!")
-                append_sub(translated_file)
-                generate_ass(subtitles_file)
-                local data = subtitle_cache.read(translated_file)
-                if subtitle_cache.valid_srt(data) then
-                    subtitle_cache.write(translated_file .. '.complete', subtitle_cache.digest(data))
-                end
-            end
-        end)
-
-        -- Increase in-progress batch count
-        in_progress_batches = in_progress_batches + 1
-    end
-
-    while start_index <= #subtitles do
-        local max_parallel_calls = calculate_parallel_calls()
-
-        -- Wait for available slots for parallel processing
-        if in_progress_batches < max_parallel_calls then
-            process_batch(start_index)
-            start_index = start_index + batch_size
-        else
-            -- If maximum parallel translations reached, wait before trying again
-            later(delay_between_calls, function()
-                translate_and_write(subtitles, subtitles_file)
-            end)
-            return
-        end
-    end
-
-    start_index = #subtitles + 1
+            if found then return {invalid = true} end
+        end,
+        save = function(job)
+            return subtitle_cache.write_atomic(item.progress, utils.format_json({identity = item.identity, job = job}) .. '\n')
+        end,
+        partial = function(values)
+            local ok = subtitle_cache.write_atomic(item.srt, serialize(values))
+            if ok then generate_ass(source, false, item) end
+            return ok
+        end,
+        finish = function(values)
+            local data = serialize(values)
+            if not subtitle_cache.valid_srt(data) or not subtitle_cache.write_atomic(item.srt, data) or
+                not subtitle_cache.write_atomic(item.srt .. '.complete', subtitle_cache.digest(data)) then return false end
+            generate_ass(source, false, item)
+            msg.info('Subtitle translation completed!')
+            return true
+        end})
+    translation_job.start()
 end
 
 -- Translate .srt file
 local function translate_srt_file(subtitles_file)
-    if not o.api_key or o.api_key:match('^%s*$') then return end
-    -- A failed request can be retried explicitly after the current batches finish.
-    if in_progress_batches == 0 then start_index = 1 end
+    if not o.api_key or o.api_key:match('^%s*$') then
+        mp.osd_message('请先在 local.conf 配置翻译接口与 key', 5); return
+    end
     if not subtitles_file then
         subtitles_file = get_current_sub()
     end
@@ -903,32 +645,25 @@ local function translate_srt_file(subtitles_file)
         subtitles_file = entry.srt
     end
 
-    local translated = subtitles_file:gsub('%.srt$', '.translate.srt')
-    local completed = subtitle_cache.read(translated)
-    if subtitle_cache.valid_srt(completed) and
-        subtitle_cache.read(translated .. '.complete') == subtitle_cache.digest(completed) then
-        generate_ass(subtitles_file)
+    local item = translation_paths(subtitles_file)
+    if not item then return end
+    if translation_job and translation_path ~= item.dir then
+        translation_job.cancel(); translation_job, translation_path = nil, nil
+    end
+    local completed = subtitle_cache.read(item.srt)
+    if subtitle_cache.valid_srt(completed) and subtitle_cache.read(item.srt .. '.complete') == subtitle_cache.digest(completed) then
+        local saved = utils.parse_json(subtitle_cache.read(item.progress) or '')
+        translation_cached = saved and saved.job or {requests = 0, input_chars = 0, tokens = 0}
+        translation_cached.state, translation_cached.message = 'completed', '已复用完成译文'
+        translation_cached.total = #(subtitle_layout.parse(subtitle_cache.read(subtitles_file)) or {})
+        translation_cached.done = translation_cached.total
+        generate_ass(subtitles_file, false, item)
+        publish_status()
         return
     end
-
-    -- Parse the original subtitle file
-    if translation_source ~= subtitles_file then
-        if in_progress_batches > 0 then
-            mp.osd_message('请先等待当前字幕翻译完成，或取消当前任务。', 5)
-            return
-        end
-        translation_source = subtitles_file
-        translated_cache, progress_cache = {}, {}
-        start_index, translated_batches_count = 1, 0
-    end
-    local subtitles = parse_srt(subtitles_file)
-    if not subtitles then
-        msg.error("Failed to parse .srt file")
-        return
-    end
-
-    -- Start translating
-    translate_and_write(subtitles, subtitles_file)
+    local subtitles = subtitle_layout.parse(subtitle_cache.read(subtitles_file))
+    if not subtitles then mp.osd_message('无有效 SRT 可翻译', 5); return end
+    translate_and_write(subtitles, subtitles_file, item)
 end
 --------------------------------------------------
 
@@ -1379,17 +1114,32 @@ management_menu = function()
     local function action(title, message, hint)
         return {title = title, hint = hint, value = {'script-message-to', 'sub_fastwhisper', message}}
     end
+    local translation = translation_job and translation_job.snapshot() or translation_cached
+    local names = {running = '请求中', waiting = '等待速率窗口', retrying = '等待重试', budget = '预算到限',
+        failed = '失败，可重试', completed = '已完成', cancelled = '已取消', idle = '未开始'}
+    local title = whisper_running and '任务：正在识别' or '任务：空闲'
+    if translation then title = string.format('翻译：%s · %d/%d 条', names[translation.state] or translation.state,
+        translation.done or 0, translation.total or 0) end
     return {type = 'ai-subtitle-manager', title = 'AI 字幕管理', keep_open = true,
         footnote = '重新生成成功前保留旧缓存；导出位置由你选择，媒体目录不自动新增文件。', items = {
             {title = '当前方案：' .. (selected_backend == 'qwen' and 'Qwen3-ASR 1.7B' or ('Whisper ' .. o.model)), selectable = false},
-            {title = whisper_running and '任务：正在生成' or '任务：空闲', selectable = false},
+            {title = title, selectable = false},
             {title = cached and '缓存：有有效完成字幕' or '缓存：当前设置无完成字幕', selectable = false},
             action('生成／复用 AI 字幕', 'sub-fastwhisper'),
             action('强制重新生成', 'sub-fastwhisper-regenerate', '成功后替换当前方案的缓存'),
             action('导出完成字幕…', 'sub-fastwhisper-export', cached and 'SRT' or '需先完成生成'),
             action('打开缓存目录', 'sub-fastwhisper-open-cache'),
             action('选择识别方案…', 'sub-fastwhisper-backend-menu'),
-            action('取消当前任务', 'sub-fastwhisper-cancel')}}
+            action('取消当前任务', 'sub-fastwhisper-cancel'),
+            {title = translation and string.format('翻译用量：%d/%d 次 · %d/%d 字符 · %d tokens',
+                translation.requests or 0, translation.request_limit or translation.request_allowance or o.translation_max_requests,
+                translation.input_chars or 0, translation.char_limit or translation.char_allowance or o.translation_max_chars,
+                translation.tokens or 0) or
+                string.format('翻译预算：每任务 %d 次请求 / %d 字符', o.translation_max_requests, o.translation_max_chars), selectable = false},
+            {title = '重试计入预算；token 用量由接口返回，不等于账单金额。', selectable = false},
+            action(translation and translation.state == 'budget' and '继续翻译／追加一档预算' or '翻译当前字幕／继续任务',
+                'sub-fastwhisper-translate-resume', '已有成功批次不会重复请求'),
+            action('仅取消翻译', 'sub-fastwhisper-translation-cancel')}}
 end
 
 local function export_cached(destination)
@@ -1428,6 +1178,16 @@ mp.register_script_message('sub-fastwhisper-open-cache', function()
     mp.commandv('run', 'explorer.exe', path:gsub('/', '\\'))
 end)
 mp.register_script_message('sub-fastwhisper-cancel', reset_session)
+mp.register_script_message('sub-fastwhisper-translate-resume', function()
+    if translation_job then translation_job.resume()
+    else
+        local entry = current_entry()
+        translate_srt_file(get_current_sub() or (entry and subtitle_cache.lookup(entry)))
+    end
+end)
+mp.register_script_message('sub-fastwhisper-translation-cancel', function()
+    if translation_job then translation_job.cancel() end
+end)
 mp.register_script_message('sub-fastwhisper-backend', select_backend)
 mp.register_script_message('sub-fastwhisper-backend-menu', function()
     mp.commandv('script-message-to', 'uosc', 'open-menu', utils.format_json(backend_menu()))

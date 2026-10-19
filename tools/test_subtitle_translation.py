@@ -21,6 +21,8 @@ def main():
     parser.add_argument('--media', type=Path, required=True, help='Local playback fixture; its transcript is not uploaded')
     parser.add_argument('--timeout', type=int, default=120)
     parser.add_argument('--offline', action='store_true', help='Use local HTTP responses for display/regression diagnosis')
+    parser.add_argument('--offline-failures', type=int, default=0, help='Return HTTP 429 before local successes')
+    parser.add_argument('--offline-budget', action='store_true', help='Pause at one request, then resume through script message')
     parser.add_argument('--subtitles', type=Path, help='Explicit SRT to upload instead of the three fixed English cues')
     parser.add_argument('--target', choices=['Chinese', 'English'], default='Chinese')
     parser.add_argument('--reuse', type=Path, help='Reopen a previous test directory and require zero new API requests')
@@ -31,6 +33,8 @@ def main():
         parser.error('--subtitles requires an existing SRT and cannot use --offline')
     if args.offline and (args.target != 'Chinese' or args.reuse):
         parser.error('--offline uses a fresh fixed English-to-Chinese fixture')
+    if not 0 <= args.offline_failures <= 2 or ((args.offline_failures or args.offline_budget) and not args.offline):
+        parser.error('0..2 injected failures and budget test require --offline')
     local = ROOT / 'local.conf'
     settings = dict(api_key='offline-test', api_url='', api_mode='offline-test')
     if not args.offline:
@@ -62,9 +66,13 @@ def main():
                '--script-opts-append=translation-test-root=' + folder.as_posix(),
                '--script-opts-append=translation-test-target=' + args.target,
                '--script-opts-append=translation-test-custom=' + ('yes' if args.subtitles else 'no'),
+               '--script-opts-append=translation-test-resume_budget=' + ('yes' if args.offline_budget else 'no'),
                '--script-opts-append=sub_fastwhisper-translate=' + args.target,
                '--script-opts-append=translation-test-timeout=' + str(args.timeout), str(fixture)]
     server = None
+    server_requests = []
+    if args.offline_budget:
+        command[-1:-1] = ['--script=' + str(ROOT / 'scripts/uosc'), '--osd-fonts-dir=' + str(ROOT / 'fonts')]
     if args.offline:
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *unused):
@@ -72,12 +80,18 @@ def main():
 
             def do_POST(self):
                 self.rfile.read(int(self.headers['Content-Length']))
+                server_requests.append(datetime.now().timestamp())
+                failed = len(server_requests) <= args.offline_failures
                 response = {'choices': [{'message': {'content': '\n'.join([
                     '00:00:00,000 --> 00:00:02,000 | 请在下雨前关上窗户。',
                     '00:00:02,000 --> 00:00:04,000 | 火车将于明天早上七点半到达。',
-                    '00:00:04,000 --> 00:00:06,000 | 所有生成的字幕必须保留在缓存文件夹中。'])}}]}
+                    '00:00:04,000 --> 00:00:06,000 | 所有生成的字幕必须保留在缓存文件夹中。'])}}], 'usage': {'total_tokens': 123}}
+                if failed:
+                    response = {'error': {'message': 'Local deliberate rate limit'}}
                 body = json.dumps(response, ensure_ascii=False).encode('utf-8')
-                self.send_response(200)
+                self.send_response(429 if failed else 200)
+                if failed:
+                    self.send_header('Retry-After', '1')
                 self.send_header('Content-Type', 'application/json')
                 self.send_header('Content-Length', str(len(body)))
                 self.end_headers()
@@ -87,6 +101,8 @@ def main():
         settings['api_url'] = 'http://127.0.0.1:' + str(server.server_port)
         command[-1:-1] = ['--script-opts-append=sub_fastwhisper-api_url=' + settings['api_url'],
                         '--script-opts-append=sub_fastwhisper-api_key=offline-test']
+        if args.offline_budget:
+            command[-1:-1] = ['--script-opts-append=sub_fastwhisper-translation_max_requests=1']
     # No verbose mpv log: option/subprocess debug records may contain credentials.
     process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                creationflags=subprocess.CREATE_NO_WINDOW)
@@ -111,15 +127,22 @@ def main():
     png = folder / 'translated.png'
     passed = (process.returncode == 0 and not timed_out and result.get('passed') and timeline.get('passed')
               and reference.get('passed') and len(timeline.get('cues', [])) == len(reference['cues'])
-              and request_count == (0 if args.reuse else (len(reference['cues']) + 19) // 20) and png.is_file()
+              and request_count == (0 if args.reuse else (len(reference['cues']) + 19) // 20 + args.offline_failures) and png.is_file()
               and png.stat().st_size > 1024 and 'TRANSLATION PLAYBACK FAIL:' not in console)
     if passed:
         passed = all(cue['start'] == original['start'] and cue['end'] == original['end']
                      for cue, original in zip(timeline['cues'], reference['cues']))
+    if args.offline:
+        passed = passed and len(server_requests) == request_count
+        if args.offline_failures:
+            passed = passed and all(b - a >= 3.8 for a, b in zip(server_requests, server_requests[1:]))
+    if args.offline_budget:
+        passed = passed and result.get('budget_resumed')
     report = dict(passed=bool(passed), exit_code=process.returncode, timed_out=timed_out,
                   model=settings['api_mode'], endpoint=settings['api_url'], api_requests=request_count,
                   real_api=not args.offline,
                   reused=bool(args.reuse),
+                  server_requests=server_requests,
                   target=args.target, reference=reference,
                   result=result, timeline=timeline)
     report_path = folder / ('reuse-report.json' if args.reuse else 'report.json')

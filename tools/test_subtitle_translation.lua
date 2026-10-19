@@ -1,6 +1,6 @@
 -- Real API integration. Credentials come from ignored local.conf, never test arguments.
 local utils = require 'mp.utils'
-local o = {root = '', timeout = 120, target = 'Chinese', custom = false}
+local o = {root = '', timeout = 120, target = 'Chinese', custom = false, resume_budget = false}
 require('mp.options').read_options(o, 'translation-test')
 package.path = mp.command_native({'expand-path', '~~/script-modules/?.lua'}) .. ';' .. package.path
 local cache = require 'ai-subtitle-cache'
@@ -11,6 +11,8 @@ local original = table.concat({
 local source = utils.join_path(o.root, 'original.srt')
 local phase, translated, content, expected_text, began = 0, nil, nil, nil, mp.get_time()
 local selections = {}
+local budget_at, budget_resumed
+local budget_stage = 0
 local original_font, original_scale = mp.get_property_number('sub-font-size'), mp.get_property_number('sub-scale')
 local function translated_text(text)
     if o.target == 'English' then return text:find('[A-Za-z]') end
@@ -32,6 +34,25 @@ mp.add_periodic_timer(0.2, function()
     local ok, err = pcall(function()
         check(mp.get_time() - began < o.timeout, 'translation timed out')
         if phase == 1 then
+            local status = mp.get_property_native('user-data/ai-subtitles/status/translation', {})
+            if status.state == 'budget' and o.resume_budget and not budget_resumed then
+                if budget_stage == 0 then
+                    budget_at, budget_stage = mp.get_time(), 1
+                    mp.commandv('script-message-to', 'sub_fastwhisper', 'sub-fastwhisper-manager')
+                elseif budget_stage == 1 and mp.get_time() - budget_at > 0.5 then
+                    if mp.get_property_native('user-data/uosc/menu/type') ~= 'ai-subtitle-manager' then
+                        check(mp.get_time() - budget_at < 5, 'budget menu visible'); return
+                    end
+                    mp.commandv('screenshot-to-file', utils.join_path(o.root, 'budget-menu.png'), 'window')
+                    mp.commandv('keypress', 'END'); budget_stage, budget_at = 2, mp.get_time()
+                elseif budget_stage == 2 and mp.get_time() - budget_at > 0.3 then
+                    mp.commandv('keypress', 'UP'); budget_stage, budget_at = 3, mp.get_time()
+                elseif budget_stage == 3 and mp.get_time() - budget_at > 0.3 then
+                    budget_resumed = true
+                    mp.commandv('keypress', 'ENTER')
+                    mp.add_timeout(0.3, function() mp.commandv('script-message-to', 'uosc', 'close-menu', 'ai-subtitle-manager') end)
+                end
+            end
             for _, track in ipairs(mp.get_property_native('track-list', {})) do
                 local path = track['external-filename']
                 if path and path:sub(-(#o.target + 5)) == '.' .. o.target .. '.ass' then
@@ -71,7 +92,9 @@ mp.add_periodic_timer(0.2, function()
             check(mp.get_property_number('sub-font-size') == original_font and
                 mp.get_property_number('sub-scale') == original_scale, 'global subtitle settings unchanged')
             check(cache.write(utils.join_path(o.root, 'result.json'), utils.format_json({
-                passed = true, source = source, translated = translated, visible = visible}) .. '\n'), 'write result')
+                passed = true, source = source, translated = translated, visible = visible,
+                budget_resumed = budget_resumed,
+                translation = mp.get_property_native('user-data/ai-subtitles/status/translation')}) .. '\n'), 'write result')
             phase = 3
             mp.msg.info('TRANSLATION PLAYBACK PASS: target language, timeline, checksum, repeat and unchanged source')
             mp.commandv('quit', '0')

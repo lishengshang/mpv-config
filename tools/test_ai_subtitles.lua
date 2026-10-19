@@ -5,7 +5,7 @@ require('mp.options').read_options(opts, 'asr-test')
 package.path = host.command_native({'expand-path', '~~/script-modules/?.lua'}) .. ';' .. package.path
 local cache = require 'ai-subtitle-cache'
 local good = '1\n00:00:00,000 --> 00:00:02,000\nA valid subtitle.\n\n'
-local passed, fake, events, hooks, handlers, jobs, state, settings, commands, aborted = 0
+local passed, fake, events, hooks, handlers, jobs, state, settings, commands, aborted, timers, clock = 0
 local function check(value, reason)
     assert(value, reason)
     passed = passed + 1
@@ -14,6 +14,7 @@ local function path(name) return utils.join_path(opts.root, name) end
 local function boot(media, overrides)
     state = {path = media, aid = 1, ['track-list'] = {}, ['cache'] = 'yes', duration = 4}
     events, hooks, handlers, jobs, commands, aborted = {}, {}, {}, {}, {}, {}
+    timers, clock = {}, 0
     settings = {output_path = path('results'), fast_whisper_path = 'fake-whisper',
         model = 'large-v3-turbo', device = 'cuda', compute_type = 'float16', api_key = '', segment_silence = false}
     for key, value in pairs(overrides or {}) do settings[key] = value end
@@ -25,6 +26,7 @@ local function boot(media, overrides)
         return state[key] or default
     end
     fake.get_property_number = fake.get_property
+    function fake.get_time() return clock end
     function fake.set_property_native(key, value) state[key] = value end
     function fake.get_property_native(key, default)
         if key == 'pid' then return host.get_property_native('pid') end
@@ -70,11 +72,32 @@ local function boot(media, overrides)
     function fake.register_script_message(name, handler) handlers[name] = handler end
     function fake.register_event(name, handler) events[name] = handler end
     function fake.add_hook(name, _, handler) hooks[name] = handler end
-    function fake.add_timeout(_, callback) return {callback = callback, kill = function() end} end
+    function fake.add_timeout(delay, callback)
+        local timer = {callback = callback, delay = delay, killed = false}
+        function timer:kill() self.killed = true end
+        timers[#timers + 1] = timer
+        return timer
+    end
     _G.mp = fake
     package.loaded['mp.msg'] = fake.msg
     package.loaded['mp.options'] = {read_options = function(o) for key, value in pairs(settings) do o[key] = value end end}
     assert(loadfile(opts.script))()
+end
+local function advance()
+    local pending = timers
+    timers = {}
+    for _, timer in ipairs(pending) do
+        if not timer.killed then clock = clock + timer.delay; timer.callback() end
+    end
+end
+local function translation_track(command)
+    if command[1] ~= 'sub-add' then return nil end
+    local file = command[2]
+    if file:find('%.translate%.srt$') then return file end
+    if file:find('%.Chinese%.ass$') then
+        local data = file:gsub('%.Chinese%.ass$', '.translate.srt')
+        if cache.read(data) then return data end
+    end
 end
 local function output(job)
     for i, arg in ipairs(job.spec.args) do if arg == '--output_dir' then return job.spec.args[i + 1] end end
@@ -216,8 +239,8 @@ local function suite()
         'manual translation never writes next to selected source subtitle')
     local translated
     for _, command in ipairs(commands) do
-        if command[1] == 'sub-add' and command[2]:find('%.translate%.srt$') then
-            translated = command[2]
+        if translation_track(command) then
+            translated = translation_track(command)
             check(command[3] == 'select', 'manual translation explicitly selects its subtitle track')
         end
     end
@@ -232,17 +255,18 @@ local function suite()
     jobs[1].callback(true, {status = 0, stdout = utils.format_json({error = {message = 'Unauthorized'}})})
     local failed_translation
     for _, command in ipairs(commands) do
-        if command[1] == 'sub-add' and command[2]:find('%.translate%.srt$') then failed_translation = command[2] end
+        if translation_track(command) then failed_translation = translation_track(command) end
     end
     check(not failed_translation or not cache.read(failed_translation .. '.complete'),
         'API failure must not mark original text as completed translation')
     handlers['sub-translate']()
+    advance()
     check(#jobs == 2, 'explicit translation retries failed API request')
     jobs[2].callback(true, {status = 0, stdout = utils.format_json({choices = {{message = {
         content = '00:00:00,000 --> 00:00:02,000 | Retried translation.'}}}})})
     local retried
     for _, command in ipairs(commands) do
-        if command[1] == 'sub-add' and command[2]:find('%.translate%.srt$') then retried = command[2] end
+        if translation_track(command) then retried = translation_track(command) end
     end
     check(retried and cache.read(retried .. '.complete'), 'successful retry completes translation')
     hooks.on_unload()
@@ -256,7 +280,7 @@ local function suite()
         jobs[1].callback(true, {status = 0, stdout = utils.format_json(response)})
         local result
         for _, command in ipairs(commands) do
-            if command[1] == 'sub-add' and command[2]:find('%.translate%.srt$') then result = command[2] end
+            if translation_track(command) then result = translation_track(command) end
         end
         check(not result, 'malformed API response cannot install a translated subtitle')
         hooks.on_unload()
@@ -270,7 +294,7 @@ local function suite()
         content = '00:00:00,000 --> 00:00:02,000 | First.\n00:00:02,000 --> 00:00:04,000 | Second.'}}}})})
     local ordered_result
     for _, command in ipairs(commands) do
-        if command[1] == 'sub-add' and command[2]:find('%.translate%.srt$') then ordered_result = command[2] end
+        if translation_track(command) then ordered_result = translation_track(command) end
     end
     check(cache.read(ordered_result) == '1\n00:00:00,000 --> 00:00:02,000\nFirst.\n\n' ..
         '2\n00:00:02,000 --> 00:00:04,000\nSecond.\n\n', 'translated cues keep source order')
@@ -311,16 +335,17 @@ local function suite()
     check(cache.write(parallel, table.concat(source_cues)), 'parallel translation fixture')
     state.sub = {external = true, ['external-filename'] = parallel}
     handlers['sub-translate']()
-    check(#jobs == 2, 'translation dispatches multiple batches')
-    for _, i in ipairs({2, 1}) do
+    check(#jobs == 1, 'translation dispatches one budgeted batch at a time')
+    for _, i in ipairs({1, 2}) do
+        if i > 1 then advance() end
         jobs[i].callback(true, {status = 0, stdout = utils.format_json({choices = {{message = {
             content = table.concat(replies[i], '\n')}}}})})
     end
     local parallel_result
     for _, command in ipairs(commands) do
-        if command[1] == 'sub-add' and command[2]:find('%.translate%.srt$') then parallel_result = command[2] end
+        if translation_track(command) then parallel_result = translation_track(command) end
     end
-    check(cache.read(parallel_result) == table.concat(expected_cues), 'out-of-order callbacks keep complete source timeline')
+    check(cache.read(parallel_result) == table.concat(expected_cues), 'sequential batches keep complete source timeline')
     check(cache.read(parallel_result .. '.complete') == cache.digest(cache.read(parallel_result)),
         'multiple batches finish with one valid completion checksum')
     hooks.on_unload()
@@ -487,6 +512,33 @@ local function suite()
     handlers['sub-translate']()
     check(#jobs == 1 and jobs[1].spec.args[1] == 'curl', 'manual translation resolves AI display ASS back to preserved SRT')
     hooks.on_unload()
+    for _, override in ipairs({{api_mode = 'another-provider-model'}, {translate = 'English'}, {font_name = 'Another font'}}) do
+        boot(a, override); events['file-loaded']()
+        check(#jobs == 0 and #state['track-list'] > 0, 'translation/style change reuses recognition without inference')
+    end
+    local identity = utils.parse_json(cache.read(utils.join_path(utils.split_path(completed), 'complete.json'))).identity
+    local projected = utils.parse_json(identity)
+    local legacy = {'asr-cache-v1'}
+    for i = 2, 15 do legacy[i] = projected[i] end
+    legacy[16], legacy[17], legacy[18], legacy[19], legacy[20], legacy[21] = 'OldTarget', 'OldModel', 'OldURL', '1', 'OldFont', projected[16]
+    local migration_root = path('legacy-cache')
+    local old = cache.entry(migration_root, utils.format_json(legacy))
+    local source_text = cache.read(completed)
+    check(cache.prepare(old, 1, 1) and cache.write(path('legacy-source.srt'), source_text) and
+        cache.commit(old, path('legacy-source.srt')), 'legacy ASR fixture')
+    local target = cache.entry(migration_root, identity)
+    check(cache.lookup_recognition(target, migration_root) and cache.read(target.srt) == source_text and
+        cache.read(old.srt) == source_text, 'legacy cache safely migrates independently of provider without removing original')
+    local progress = path('progress-transaction.json')
+    check(cache.write_atomic(progress, 'old progress'), 'progress transaction fixture')
+    local original_rename = os.rename
+    os.rename = function(from, to)
+        if from == progress .. '.pending' and to == progress then return nil, 'injected replacement failure' end
+        return original_rename(from, to)
+    end
+    local wrote = cache.write_atomic(progress, 'new progress')
+    os.rename = original_rename
+    check(not wrote and cache.read(progress) == 'old progress', 'progress installation failure preserves previous budget')
 end
 host.add_timeout(0.1, function()
     local ok, err = pcall(suite)

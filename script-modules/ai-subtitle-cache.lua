@@ -62,6 +62,21 @@ function M.write(path, data)
     return ok ~= nil and closed ~= nil
 end
 
+function M.write_atomic(path, data)
+    if not M.write(path .. '.pending', data) then return false end
+    local existed = M.read(path) ~= nil
+    if existed then
+        os.remove(path .. '.previous')
+        if not os.rename(path, path .. '.previous') then return false end
+    end
+    if not os.rename(path .. '.pending', path) then
+        if existed then os.rename(path .. '.previous', path) end
+        return false
+    end
+    os.remove(path .. '.previous')
+    return true
+end
+
 function M.entry(root, identity)
     local key = M.digest(identity)
     local dir = utils.join_path(root, key)
@@ -76,6 +91,50 @@ function M.lookup(entry)
     if meta and meta.schema == 1 and meta.identity == entry.identity and
         meta.complete == true and M.valid_srt(data) and meta.payload == M.digest(data) then
         return entry.srt
+    end
+end
+
+-- Legacy recognition keys included translator/style fields. Project only ASR settings.
+function M.recognition_identity(identity)
+    local data = utils.parse_json(identity or '')
+    if type(data) ~= 'table' then return nil end
+    if data[1] == 'whisper-silence-v1' then
+        local inner = M.recognition_identity(data[2])
+        return inner and utils.format_json({'whisper-silence-v2', inner})
+    end
+    local scheme = ({['asr-cache-v1'] = 'asr-cache-v2', ['qwen-asr-cache-v1'] = 'qwen-asr-cache-v2'})[data[1]]
+    if not scheme then return identity end
+    local result = {scheme}
+    for i = 2, 15 do result[i] = data[i] end
+    result[16] = data[21]
+    return utils.format_json(result)
+end
+
+function M.legacy_candidates(root, identity)
+    local found = {}
+    for _, name in ipairs(utils.readdir(root, 'dirs') or {}) do
+        if name:match('^%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x$') then
+            local dir = utils.join_path(root, name)
+            local meta = utils.parse_json(M.read(utils.join_path(dir, 'complete.json')) or '')
+            if meta and type(meta.identity) == 'string' and meta.identity ~= identity and
+                M.recognition_identity(meta.identity) == identity then
+                local entry = M.entry(root, meta.identity)
+                if entry.key == name and M.lookup(entry) then
+                    entry.modified = (utils.file_info(entry.manifest) or {}).mtime or 0
+                    found[#found + 1] = entry
+                end
+            end
+        end
+    end
+    table.sort(found, function(a, b) return a.modified > b.modified end)
+    return found
+end
+
+function M.lookup_recognition(entry, root)
+    local current = M.lookup(entry)
+    if current then return current end
+    for _, old in ipairs(M.legacy_candidates(root, entry.identity)) do
+        if M.mkdir(entry.dir) and M.commit(entry, old.srt) then return entry.srt end
     end
 end
 

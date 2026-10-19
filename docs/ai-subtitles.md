@@ -10,7 +10,7 @@
 - 长句按 UTF-8 字符宽度和标点分屏，双语每种语言一行、总计最多两行；`layout_line_width=56` 按半角计宽，中文约占两格，`layout_max_seconds=6` 控制长段显示时长。拆分时间按文本长度近似分配，不等于逐词对齐；数学公式和快速讲话仍需人工抽查。改排版参数后重新加载即可，无需重新识别或请求翻译。
 - 菜单 **字幕 → 下载／生成 → AI 字幕识别方案…** 选择 Whisper 或 Qwen；勾选项为当前方案，`Alt+f` 生成所选方案的字幕。切换会取消旧任务、移除缓存字幕轨并尝试读取新方案的缓存，保留其他字幕轨；不会立即开始识别。
 - 菜单选择跨文件保持，重启播放器恢复配置中的 `backend=whisper`；要长期默认 Qwen，可自行将配置改成 `backend=qwen`。字幕位置/时延重置不改变识别方案。
-- 缓存按后端、媒体、音轨和识别/翻译设置区分，完成且有效的 SRT 才能复用；按生成键可复用，重新打开媒体会尝试加载。Whisper 原有缓存键保留，Qwen 使用独立命名空间。中途结果与完成缓存分开，卸载取消旧任务并隔离旧回调。
+- 识别缓存按后端、媒体、音轨和识别设置区分，译文另按原文校验值、接口、模型和目标语言缓存；换接口/语言/排版不重新识别。可核验的旧识别缓存会复制迁移并保留旧目录；旧译文只有原文与提供者设置一致才导入。完成且有效的 SRT 才能复用；中途结果与完成缓存分开，卸载取消旧任务并隔离旧回调。
 - 分段模式（`use_segment=yes`，默认关闭）在首段完成后显示原文，首段目标为 `min(segment_duration, 15)` 秒，之后目标为 `max(segment_duration, 40)` 秒，最后一段截到媒体结尾。使用异步提取/识别，可通过管理菜单取消；切换文件会取消旧任务并移除未完成字幕轨。音频按任务开始时选定的内置音轨解码为 16kHz 单声道 PCM，暂不支持外挂音轨。
 - `segment_silence=yes`（分段时默认启用）在目标边界前后 3 秒范围内，用 FFmpeg 查找低于 -35dB、至少 0.25 秒的静音，选择距目标最近的静音中点；首段仍不超过 15 秒，也不短于原目标的一半。只扫描边界附近的音频，增加提取耗时；没有附近静音时回退固定时长，不保证连续讲话或背景音乐中不截断句子。设 `segment_silence=no` 可对照固定切片。
 - 分段与整片使用相同的完成缓存机制，但按 `use_segment` 等设置分别缓存，不互相复用；静音切片使用独立缓存标识，原有整片/固定切片缓存保留，切回对应设置可复用。中间结果不会标为完成，失败/取消不覆盖旧完成缓存。分段期间先显示原文，整片识别成功后再翻译；真实翻译 API 的短样本验证见下文。
@@ -18,6 +18,8 @@
 - **字幕 → 下载／生成 → AI 字幕管理…** 查看当前后端、任务与完成缓存状态，生成/复用、强制重新生成、导出完成 SRT 或打开缓存目录。重新生成跳过缓存复用，但失败/取消保留旧结果；成功后替换当前缓存并移除旧译文，其他媒体与后端的结果不变。
 - 导出弹出 Windows 保存对话框，由用户选择位置；只有明确选择导出才可在媒体旁保存。对话框覆盖已有文件需确认；带目标路径的控制台导出消息拒绝覆盖。位置/字号/时延重置不重新识别，也不删除缓存。
 - 翻译需兼容 API 与 key，私人 key 写在 `local.conf`，示例见 `local.conf.example`；没有 key 时保留原语言识别。选择本地外部 SRT 后可用翻译消息，内封字幕先导出，ASS 不能直接走 SRT 解析。HTTP/响应格式失败时不把原文标为已完成译文，可显式重试；有效译文按源时间轴写入，完成缓存可直接复用。curl 需支持 `--fail-with-body`。
+- 管理菜单显示翻译条数、请求/字符预算及接口返回的 token 用量。默认每任务最多 **20 次请求、2 万字幕输入字符**，重试计入；到限暂停，选择 **继续翻译／追加一档预算** 后追加同档预算。字符数按发送的时间戳与字幕文本计算，不含系统提示与 JSON 开销；token 数不代表账单金额。`translation_max_requests`/`translation_max_chars` 可配置，0 表示明确取消对应上限。
+- 请求串行，`api_rate` 限制发送间隔；网络/408/429/5xx 最多重试 `translation_retries=2` 次，遵循秒数或 HTTP 日期格式的 `Retry-After` 与指数退避。401/403/格式错误需人工检查后重试。成功批次和预算先写入进度文件，重开后只处理缺失批次；进度损坏或无法保存预算时停止发送，不静默重置用量。仅取消翻译可保留识别结果与成功批次。预算不替代平台账户限额，同一字幕任务不支持多个播放器实例并发写入。
 
 控制台消息：
 
@@ -32,6 +34,8 @@ script-message-to sub_fastwhisper sub-fastwhisper-regenerate
 script-message-to sub_fastwhisper sub-fastwhisper-export
 script-message-to sub_fastwhisper sub-fastwhisper-open-cache
 script-message-to sub_fastwhisper sub-translate
+script-message-to sub_fastwhisper sub-fastwhisper-translate-resume
+script-message-to sub_fastwhisper sub-fastwhisper-translation-cancel
 ```
 
 历史 turbo “约 12 倍实时”没有本次同条件复测，不能当作速度承诺；直播、拖动、翻译长时限流与全部日常脚本组合需分别验证。
@@ -127,6 +131,8 @@ python tools/test_ai_subtitles.py --full-config --segment --render --media "<本
 
 本轮修复请求失败把原文标记为译文、哈希/并行回调使译文乱序，以及 `sub-reload` 分配新轨道 ID 后仍选旧 ID 导致字幕关闭。130 项离线断言覆盖 API 错误、异常响应/时间戳、显式重试、跨会话缓存、取消后的旧回调及并行批次倒序完成；本地 HTTP 检查与真实服务检查分别记录，不混为一次验收。
 
+任务管理修订另通过 138 项字幕断言与 20 项队列断言：预算/断点恢复、存储故障、有限重试、取消旧回调和旧缓存迁移。原生 HTTP 429 → 一次请求预算暂停 → uosc 键盘选择继续 → 成功的报告为 `cache/translation-20261019-214316/`、`20261019-214516/`，实际请求间隔符合默认 15 次/分钟；真实服务最终回归为 `20261019-214550/`。原文生成/管理菜单回归为 `cache/asr-playback-20261019-214428/`。真实账户的限流、扣费与长时任务仍需独立验收，不能用本地注入替代。
+
 复现入口（会产生少量真实 API 调用，默认仅发送三条固定测试字幕；密钥仅从忽略的 `local.conf` 读取）：
 
 ```powershell
@@ -135,6 +141,8 @@ python tools/test_subtitle_translation.py --media '<本地测试视频>'
 python tools/test_subtitle_translation.py --media '<缓存课程切片>' --subtitles '<待翻译 SRT>' --target English
 # 同样参数加 --reuse '<上一轮 cache/translation-* 目录>'，要求重开播放器后零请求复用
 # --offline 使用本地 HTTP 固定响应，只检查显示与请求链路，不证明真实 API 可用
+python tools/test_subtitle_translation.py --offline --offline-failures 1 --offline-budget --media '<本地测试视频>'
+..\mpv.com --no-config --load-scripts=no --script=tools/test_translation_job.lua --idle=yes --vo=null --ao=null
 ```
 
 工具不启用 mpv 的详细文件日志，控制台输出在保存前替换密钥；原始详细日志可能包含选项或 subprocess 参数，不用于真实密钥测试。
