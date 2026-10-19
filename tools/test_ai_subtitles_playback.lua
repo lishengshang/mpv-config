@@ -46,6 +46,7 @@ local function cached_track()
     for _, track in ipairs(mp.get_property_native('track-list', {})) do
         local path = track['external-filename']
         if track.type == 'sub' and path and path:gsub('\\', '/'):find(o.root .. '/results/', 1, true) then
+            path = path:gsub('%.ai%.ass$', '.srt')
             return path
         end
     end
@@ -174,7 +175,7 @@ mp.add_periodic_timer(0.15, function()
         elseif phase == 3 and result then
             metrics.auto_reuse_seconds = mp.get_time() - previous
             check(result == first_result, 'first file auto-reuses original result')
-            check(mp.get_property('current-tracks/sub/external-filename') == first_result,
+            check(mp.get_property('current-tracks/sub/external-filename'):gsub('%.ai%.ass$', '.srt') == first_result,
                 'automatic reuse selects subtitle when no other subtitle is selected')
             verify(result)
             mp.commandv('keypress', 'ALT+f')

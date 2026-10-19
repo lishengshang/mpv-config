@@ -12,6 +12,7 @@ local options = require "mp.options"
 -- Local cache/lifecycle changes: see docs/ai-subtitles.md before upstream updates.
 package.path = mp.command_native({'expand-path', '~~/script-modules/?.lua'}) .. ';' .. package.path
 local subtitle_cache = require 'ai-subtitle-cache'
+local subtitle_layout = require 'ai-subtitle-layout'
 
 ---- Script Options ----
 local o = {
@@ -68,6 +69,10 @@ local o = {
     translate = "Chinese",
     -- Specify the font to be used for the generated ass captions
     font_name = "sans-serif",
+    font_scale = 0.8,
+    layout_line_width = 56,
+    layout_max_lines = 2,
+    layout_max_seconds = 6,
 }
 
 options.read_options(o, _, function() end)
@@ -115,6 +120,7 @@ local time_ranges = {}
 local progress_cache = {}
 local translated_cache = {}
 local management_menu
+local generate_ass
 
 local is_windows = package.config:sub(1, 1) == "\\"
 
@@ -287,9 +293,18 @@ end
 local function get_current_sub()
     local sub = mp.get_property_native("current-tracks/sub")
     if sub then
-        if sub.external and not is_protocol(sub["external-filename"])
-        and sub["external-filename"]:lower():match("%.srt$") then
-            return sub["external-filename"]
+        local file = sub['external-filename']
+        if sub.external and file and not is_protocol(file) then
+            if file:lower():match('%.srt$') then return file end
+            local root = normalize(cache_root):gsub('\\', '/'):lower():gsub('/+$', '') .. '/'
+            if normalize(file):gsub('\\', '/'):lower():sub(1, #root) == root then
+                for _, suffix in ipairs({'.ai.ass', '.' .. o.translate .. '.ass'}) do
+                    if file:sub(-#suffix) == suffix then
+                        local source = file:sub(1, -#suffix - 1) .. '.srt'
+                        if subtitle_cache.valid_srt(subtitle_cache.read(source)) then return source end
+                    end
+                end
+            end
         end
     end
     return nil
@@ -306,7 +321,8 @@ local function check_sub(sub_file)
         end
 
         if track["type"] == "sub" and external_filename and
-            normalize(external_filename) == normalize(sub_file) then
+            (normalize(external_filename) == normalize(sub_file) or
+            normalize(external_filename) == normalize(sub_file:gsub('%.srt$', '.ai.ass'))) then
             return true, track["id"]
         end
     end
@@ -314,6 +330,16 @@ local function check_sub(sub_file)
 end
 
 local function append_sub(sub_file, auto)
+    -- Scale AI tracks through a derived ASS, preserving global/user subtitle settings.
+    local root = normalize(cache_root):gsub('\\', '/'):lower():gsub('/+$', '') .. '/'
+    if sub_file:match('%.srt$') and not sub_file:match('%.translate%.srt$') and
+        normalize(sub_file):gsub('\\', '/'):lower():sub(1, #root) == root then
+        local ass = subtitle_layout.render(subtitle_cache.read(sub_file), nil, {scale = o.font_scale,
+            font = o.font_name, line_width = o.layout_line_width, max_lines = o.layout_max_lines,
+            max_seconds = o.layout_max_seconds, plain_font_size = mp.get_property_number('sub-font-size', 50)})
+        local display = sub_file:gsub('%.srt$', '.ai.ass')
+        if ass and subtitle_cache.write(display, ass) then sub_file = display end
+    end
     local sub, id = check_sub(sub_file)
     if not sub then
         if auto then
@@ -341,8 +367,7 @@ local function load_cached(entry, auto)
     local translation = subtitle_cache.read(translated)
     if translation and subtitle_cache.valid_srt(translation) and
         subtitle_cache.read(translated .. '.complete') == subtitle_cache.digest(translation) then
-        local ass = entry.srt:gsub('%.srt$', '.' .. o.translate .. '.ass')
-        if file_exists(ass) then append_sub(ass, auto) else append_sub(translated, auto) end
+        generate_ass(entry.srt, auto)
     end
     msg.info('AI subtitle cache reused: ' .. entry.key)
     publish_status()
@@ -544,52 +569,18 @@ local function merge_subtitles(sub1, sub2)
 end
 
 -- Generating ASS subtitles files
-local function generate_ass(subtitles_file)
-    local ass_name = string.format(".%s.ass", o.translate)
-    local translated_file = subtitles_file:gsub("%.srt$", ".translate.srt")
-    local merge_file = subtitles_file:gsub("%.srt$", ass_name)
-    if file_exists(subtitles_file) and file_exists(translated_file) then
-        local sub1 = parse_sub(translated_file)
-        local sub2 = parse_sub(subtitles_file)
-        if sub1 and sub2 then
-            merged = merge_subtitles(sub1, sub2)
-
-            if #merged == 0 then return end
-        end
+generate_ass = function(subtitles_file, auto)
+    local translated_file = subtitles_file:gsub('%.srt$', '.translate.srt')
+    local merge_file = subtitles_file:gsub('%.srt$', '.' .. o.translate .. '.ass')
+    local ass, err = subtitle_layout.render(subtitle_cache.read(subtitles_file), subtitle_cache.read(translated_file), {
+        scale = o.font_scale, font = o.font_name, line_width = o.layout_line_width,
+        max_lines = o.layout_max_lines, max_seconds = o.layout_max_seconds})
+    if not ass or not subtitle_cache.write(merge_file, ass) then
+        msg.warn('AI subtitle layout failed: ' .. tostring(err or merge_file))
+        return false
     end
-    local file = io.open(merge_file, "w")
-    if not file then return end
-    file:write("[Script Info]\n")
-    file:write("Title: Bilingual Subtitles\n")
-    file:write("ScriptType: v4.00+\n")
-    file:write("WrapStyle: 0\n")
-    file:write("ScaledBorderAndShadow: yes\n")
-    file:write("PlayResX: 1920\n")
-    file:write("PlayResY: 1080\n")
-    file:write("\n")
-    file:write("[V4+ Styles]\n")
-    file:write("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n")
-    file:write("Style: Default,".. o.font_name .. ",70,&H00FFFFFF,&HF0000000,&H00000000,&H32000000,0,0,0,0,100,100,0,0.00,1,2,1,2,5,5,2,-1\n")
-    file:write("\n")
-    file:write("[Events]\n")
-    file:write("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
-
-    for _, sub in pairs(merged) do
-        local translate_text, original_text = sub.text:gsub("\n$", ""):match("^(.-)\n+(.*)$")
-        if translate_text and original_text then
-            local translate_text = translate_text:gsub("^%s*(.-)%s*$", "%1")
-            local original_text = original_text:gsub("^%s*(.-)%s*$", "%1")
-            if is_text_identical(translate_text, original_text) then
-                file:write(string.format("Dialogue: 0,%s,%s,Default,,0,0,0,,%s\n", sub.start_time, sub.end_time, translate_text))
-            else
-                file:write(string.format("Dialogue: 0,%s,%s,Default,,0,0,0,,%s\n", sub.start_time, sub.end_time, translate_text ..
-                '\\N{\\fn'.. o.font_name .. '}{\\b0}{\\fs50}{\\c&H62A8EB&}{\\shad1}' .. original_text))
-            end
-        end
-    end
-
-    file:close()
-    append_sub(merge_file)
+    append_sub(merge_file, auto)
+    return true
 end
 
 -------------Translation function----------------

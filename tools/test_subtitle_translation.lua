@@ -11,6 +11,7 @@ local original = table.concat({
 local source = utils.join_path(o.root, 'original.srt')
 local phase, translated, content, expected_text, began = 0, nil, nil, nil, mp.get_time()
 local selections = {}
+local original_font, original_scale = mp.get_property_number('sub-font-size'), mp.get_property_number('sub-scale')
 local function translated_text(text)
     if o.target == 'English' then return text:find('[A-Za-z]') end
     return text:find('[\228-\233][\128-\191][\128-\191]')
@@ -40,7 +41,11 @@ mp.add_periodic_timer(0.2, function()
             end
             if not translated then return end
             content = cache.read(translated)
-            expected_text = assert(content:match('^%s*%d+\n[^\n]+\n(.-)\n\n')):gsub('%s+', ' ')
+            local display = assert(cache.read(translated:gsub('%.translate%.srt$', '.' .. o.target .. '.ass')))
+            local first, last, words = display:match('Dialogue: 0,([^,]+),([^,]+),Default,,0,0,0,,([^\n]+)')
+            check(first and words, 'derived ASS display cue')
+            expected_text = words:gsub('{.-}', ''):match('^(.-)\\N') or words:gsub('{.-}', '')
+            expected_text = expected_text:gsub('%s+', ' ')
             check(cache.valid_srt(content), 'valid translated SRT')
             check(cache.read(translated .. '.complete') == cache.digest(content), 'completion checksum')
             check(translated_text(content), 'target-language output')
@@ -49,10 +54,11 @@ mp.add_periodic_timer(0.2, function()
             check(not cache.read(source:gsub('%.srt$', '.translate.srt')), 'no source-adjacent translation')
             phase, began = 2, mp.get_time()
             send() -- Repeated action must not append duplicate cues or issue another request.
-            local h, m, s, ms, eh, em, es, ems = original:match(
-                '(%d%d):(%d%d):(%d%d),(%d%d%d) %-%-> (%d%d):(%d%d):(%d%d),(%d%d%d)')
-            local start = h * 3600 + m * 60 + s + ms / 1000
-            local finish = eh * 3600 + em * 60 + es + ems / 1000
+            local function seconds(value)
+                local h, m, s = value:match('(%d+):(%d+):([%d.]+)')
+                return h * 3600 + m * 60 + s
+            end
+            local start, finish = seconds(first), seconds(last)
             mp.commandv('seek', tostring((start + finish) / 2), 'absolute+exact')
         elseif phase == 2 and mp.get_time() - began > 1 then
             check(cache.read(translated) == content, 'repeated action preserves translated file')
@@ -62,6 +68,8 @@ mp.add_periodic_timer(0.2, function()
                 return
             end
             mp.commandv('screenshot-to-file', utils.join_path(o.root, 'translated.png'), 'window')
+            check(mp.get_property_number('sub-font-size') == original_font and
+                mp.get_property_number('sub-scale') == original_scale, 'global subtitle settings unchanged')
             check(cache.write(utils.join_path(o.root, 'result.json'), utils.format_json({
                 passed = true, source = source, translated = translated, visible = visible}) .. '\n'), 'write result')
             phase = 3

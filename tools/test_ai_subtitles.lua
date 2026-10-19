@@ -103,7 +103,7 @@ local function suite()
         ', output=' .. tostring(jobs[1] and output(jobs[1])))
     complete(good)
     check(#state['track-list'] == 1 and state.osd:find('缓存'), 'zero exit and SRT loads completed cache')
-    local completed = state['track-list'][1]['external-filename']
+    local completed = state['track-list'][1]['external-filename']:gsub('%.ai%.ass$', '.srt')
     check(not utils.file_info(path('A/clip.srt')), 'no sidecar created')
     hooks.on_unload()
     check(cache.read(completed) == good, 'unload preserves complete subtitle')
@@ -178,7 +178,7 @@ local function suite()
     check(#jobs == 1 and jobs[1].spec.args[1] == 'fake-qwen-python' and
         jobs[1].spec.args[3] == '--input' and not output(jobs[1]), 'Qwen uses independent Python command')
     complete(good)
-    local qwen_result = state['track-list'][#state['track-list']]['external-filename']
+    local qwen_result = state['track-list'][#state['track-list']]['external-filename']:gsub('%.ai%.ass$', '.srt')
     check(qwen_result ~= completed, 'Qwen and Whisper cache identities are isolated')
     handlers['sub-fastwhisper-backend']('whisper')
     handlers['sub-fastwhisper']()
@@ -379,7 +379,7 @@ local function suite()
         'first slice decodes selected audio to short PCM')
     extracted()
     complete((good:gsub('A valid subtitle.', '123')))
-    local partial = state['track-list'][1]['external-filename']
+    local partial = state['track-list'][1]['external-filename']:gsub('%.ai%.ass$', '.srt')
     check(cache.read(partial):find('123', 1, true) and state['user-data/ai-subtitles/status'].running and
         not state['user-data/ai-subtitles/status'].cached, 'numeric partial text loads before completion')
     check(tonumber(arg(jobs[#jobs], '-ss')) == 10 and tonumber(arg(jobs[#jobs], '-t')) == 40,
@@ -416,7 +416,7 @@ local function suite()
     state.duration = 42
     handlers['sub-fastwhisper']()
     extracted(); complete(good)
-    partial = state['track-list'][1]['external-filename']
+    partial = state['track-list'][1]['external-filename']:gsub('%.ai%.ass$', '.srt')
     check(cache.read(partial):find('00:00:01,250', 1, true), 'backend timestamps clipped to slice boundary')
     check(tonumber(arg(jobs[#jobs], '-ss')) == 1.25, 'fractional start is not rounded to an integer second')
     extracted(); complete('')
@@ -482,6 +482,11 @@ local function suite()
     jobs[1].callback(true, {status = 7, stderr = 'analysis failed'})
     check(not state['user-data/ai-subtitles/status'].running and not state['user-data/ai-subtitles/status'].cached,
         'failed analysis cannot be reported as successful recognition')
+    boot(a, {api_key = 'mock-only', api_mode = 'layout-current-track'})
+    state.sub = {external = true, ['external-filename'] = completed:gsub('%.srt$', '.ai.ass')}
+    handlers['sub-translate']()
+    check(#jobs == 1 and jobs[1].spec.args[1] == 'curl', 'manual translation resolves AI display ASS back to preserved SRT')
+    hooks.on_unload()
 end
 host.add_timeout(0.1, function()
     local ok, err = pcall(suite)
