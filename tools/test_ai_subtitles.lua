@@ -15,7 +15,7 @@ local function boot(media, overrides)
     state = {path = media, aid = 1, ['track-list'] = {}, ['cache'] = 'yes', duration = 4}
     events, hooks, handlers, jobs, commands, aborted = {}, {}, {}, {}, {}, {}
     settings = {output_path = path('results'), fast_whisper_path = 'fake-whisper',
-        model = 'large-v3-turbo', device = 'cuda', compute_type = 'float16', api_key = ''}
+        model = 'large-v3-turbo', device = 'cuda', compute_type = 'float16', api_key = '', segment_silence = false}
     for key, value in pairs(overrides or {}) do settings[key] = value end
     fake = {msg = {info = function() end, error = function() end, warn = function() end,
         debug = function() end, verbose = function() end}}
@@ -35,6 +35,9 @@ local function boot(media, overrides)
     function fake.command_native(spec)
         if spec.name == 'subprocess' then
             if spec.args[1] == 'curl' then error('empty key must not call API') end
+            if spec.args[1] == 'ffmpeg' or spec.args[1] == 'fake-whisper' then
+                error('recognition and extraction must be asynchronous')
+            end
             return host.command_native(spec) -- cache mkdir only
         end
         if spec[1] == 'expand-path' and spec[2] == '~~/cache/ai-subtitles' then return path('results') end
@@ -252,6 +255,128 @@ local function suite()
         os.rename = rename
         check(not ok and cache.lookup(transaction) and cache.read(transaction.srt) == good, 'SRT/marker install failure restores completed result')
     end
+    boot(a, {use_segment = true, model = 'segment-fixture'})
+    state.duration = 65.25
+    state['current-tracks/audio'] = {['ff-index'] = 3}
+    handlers['sub-fastwhisper']()
+    check(#jobs == 1 and jobs[1].spec.args[1] == 'ffmpeg' and
+        state['user-data/ai-subtitles/status'].running, 'segmented extraction is asynchronous and publishes running state')
+    local function arg(job, name)
+        for i, value in ipairs(job.spec.args) do if value == name then return job.spec.args[i + 1] end end
+    end
+    local function extracted()
+        local job = jobs[#jobs]
+        check(cache.write(job.spec.args[#job.spec.args], 'mock PCM'), 'segment audio fixture')
+        job.callback(true, {status = 0})
+    end
+    check(arg(jobs[1], '-c:a') == 'pcm_s16le' and arg(jobs[1], '-ar') == '16000' and
+        arg(jobs[1], '-map') == '0:3' and tonumber(arg(jobs[1], '-t')) == 10,
+        'first slice decodes selected audio to short PCM')
+    extracted()
+    complete((good:gsub('A valid subtitle.', '123')))
+    local partial = state['track-list'][1]['external-filename']
+    check(cache.read(partial):find('123', 1, true) and state['user-data/ai-subtitles/status'].running and
+        not state['user-data/ai-subtitles/status'].cached, 'numeric partial text loads before completion')
+    check(tonumber(arg(jobs[#jobs], '-ss')) == 10 and tonumber(arg(jobs[#jobs], '-t')) == 40,
+        'second slice continues at first boundary and grows to forty seconds')
+    extracted(); complete(good)
+    check(cache.read(partial):find('00:00:10,000', 1, true), 'second slice timestamps shifted')
+    check(tonumber(arg(jobs[#jobs], '-ss')) == 50 and tonumber(arg(jobs[#jobs], '-t')) == 15.25,
+        'fractional tail is clamped to media duration')
+    extracted(); complete(good)
+    check(not state['user-data/ai-subtitles/status'].running and state['user-data/ai-subtitles/status'].cached,
+        'all slices finalize one completed cache')
+    check(#state['track-list'] == 1 and state['track-list'][1]['external-filename'] ~= partial,
+        'completed track replaces partial track')
+    handlers['sub-fastwhisper']()
+    check(#jobs == 6, 'segmented completed cache reuses without another process')
+    handlers['sub-fastwhisper-regenerate']()
+    local old = jobs[#jobs]
+    handlers['sub-fastwhisper-cancel']()
+    local job_count = #jobs
+    old.callback(true, {status = 0})
+    check(aborted[job_count] and #jobs == job_count and state['user-data/ai-subtitles/status'].cached,
+        'cancel aborts extraction, ignores stale callback and preserves completed cache')
+    boot(b, {use_segment = true, model = 'segment-fixture'})
+    state.duration = 65.25
+    handlers['sub-fastwhisper']()
+    extracted(); complete(good)
+    local stale_segment = jobs[#jobs]
+    handlers['sub-fastwhisper-cancel']()
+    job_count = #jobs
+    stale_segment.callback(true, {status = 0})
+    check(#state['track-list'] == 0 and not state['user-data/ai-subtitles/status'].cached and #jobs == job_count,
+        'cancel removes partial track and never marks incomplete transcript complete')
+    boot(b, {use_segment = true, segment_duration = 1.25, model = 'fractional-segment'})
+    state.duration = 42
+    handlers['sub-fastwhisper']()
+    extracted(); complete(good)
+    partial = state['track-list'][1]['external-filename']
+    check(cache.read(partial):find('00:00:01,250', 1, true), 'backend timestamps clipped to slice boundary')
+    check(tonumber(arg(jobs[#jobs], '-ss')) == 1.25, 'fractional start is not rounded to an integer second')
+    extracted(); complete('')
+    check(state['user-data/ai-subtitles/status'].running and #jobs == 5,
+        'empty silence-only middle slice continues recognition')
+    extracted(); complete(good)
+    check(state['user-data/ai-subtitles/status'].cached, 'silent slice does not discard valid speech')
+    for _, stage in ipairs({'extraction', 'recognition'}) do
+        boot(b, {use_segment = true, model = 'failed-' .. stage})
+        handlers['sub-fastwhisper']()
+        if stage == 'recognition' then extracted() end
+        jobs[#jobs].callback(true, {status = 7, stderr = 'injected failure'})
+        check(not state['user-data/ai-subtitles/status'].running and not state['user-data/ai-subtitles/status'].cached,
+            stage .. ' failure clears running state without completing cache')
+    end
+    boot(b, {use_segment = true, model = 'empty-segment'})
+    handlers['sub-fastwhisper']()
+    extracted(); complete('')
+    check(not state['user-data/ai-subtitles/status'].cached and #state['track-list'] == 0,
+        'all-silent media never produces a false completed cache')
+    boot(b, {use_segment = true, segment_duration = 0})
+    handlers['sub-fastwhisper']()
+    check(#jobs == 0 and not (state['user-data/ai-subtitles/status'] or {}).running, 'invalid duration cannot start an endless loop')
+    boot(a, {use_segment = true, segment_silence = true, model = 'silence-fixture'})
+    state.duration = 65
+    state['current-tracks/audio'] = {['ff-index'] = 3}
+    handlers['sub-fastwhisper']()
+    check(arg(jobs[1], '-af'):find('silencedetect', 1, true) and tonumber(arg(jobs[1], '-ss')) == 7 and
+        tonumber(arg(jobs[1], '-t')) == 6 and arg(jobs[1], '-map') == '0:3', 'silence scan is limited to boundary window and selected audio')
+    jobs[1].callback(true, {status = 0, stderr = '[silencedetect] silence_start: 3.6\n[silencedetect] silence_end: 4.1 | silence_duration: 0.5\n' ..
+        '[silencedetect] silence_start: 5.6\n[silencedetect] silence_end: 5.9 | silence_duration: 0.3'})
+    check(math.abs(tonumber(arg(jobs[#jobs], '-t')) - 10.85) < 0.0001, 'first cut moves to midpoint of nearby silence')
+    extracted(); complete(good)
+    local detection = jobs[#jobs]
+    check(arg(detection, '-af') ~= nil, 'next boundary is analyzed asynchronously')
+    detection.callback(true, {status = 0, stderr = 'ordinary ffmpeg output without silence'})
+    check(math.abs(tonumber(arg(jobs[#jobs], '-ss')) - 10.85) < 0.0001 and tonumber(arg(jobs[#jobs], '-t')) == 40,
+        'no nearby silence falls back to fixed length without timestamp gap')
+    extracted(); complete(good)
+    check(arg(jobs[#jobs], '-af') == nil, 'media tail does not need a boundary scan')
+    extracted(); complete(good)
+    check(state['user-data/ai-subtitles/status'].cached, 'silence-based slices commit complete result')
+    local silence_result = state['track-list'][1]['external-filename']
+    boot(a, {use_segment = true, segment_silence = false, model = 'silence-fixture'})
+    events['file-loaded']()
+    check(#state['track-list'] == 0 and cache.read(silence_result), 'fixed and silence slice caches are separate and retained')
+    boot(b, {use_segment = true, segment_silence = true, model = 'cancel-silence'})
+    handlers['sub-fastwhisper']()
+    local stale_detection = jobs[1]
+    handlers['sub-fastwhisper-cancel']()
+    stale_detection.callback(true, {status = 0, stderr = ''})
+    check(aborted[1] and #jobs == 1, 'cancel aborts boundary analysis and ignores late completion')
+    boot(b, {use_segment = true, segment_silence = true, segment_duration = 100, model = 'capped-silence'})
+    state.duration = 65
+    handlers['sub-fastwhisper']()
+    check(tonumber(arg(jobs[1], '-ss')) == 12 and tonumber(arg(jobs[1], '-t')) == 3,
+        'first boundary scan cannot extend beyond fifteen seconds')
+    jobs[1].callback(true, {status = 0, stderr = 'silence_start: 2.5\nsilence_end: 3'})
+    check(tonumber(arg(jobs[#jobs], '-t')) == 14.75, 'first silence-based slice stays within latency cap')
+    handlers['sub-fastwhisper-cancel']()
+    boot(b, {use_segment = true, segment_silence = true, model = 'failed-silence'})
+    handlers['sub-fastwhisper']()
+    jobs[1].callback(true, {status = 7, stderr = 'analysis failed'})
+    check(not state['user-data/ai-subtitles/status'].running and not state['user-data/ai-subtitles/status'].cached,
+        'failed analysis cannot be reported as successful recognition')
 end
 host.add_timeout(0.1, function()
     local ok, err = pcall(suite)

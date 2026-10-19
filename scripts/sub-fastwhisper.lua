@@ -52,6 +52,7 @@ local o = {
     -- which is more suitable for long video scenarios.
     --! Depends on FFmpeg
     use_segment = false,
+    segment_silence = true,
     -- Segment duration in seconds
     segment_duration = 10,
     ---- GPT API Options ----
@@ -197,6 +198,9 @@ local function current_entry(extra)
             'cuda:bfloat16:sdpa', o.language, tostring(o.qwen_chunk_seconds), tostring(o.max_line_width),
             o.translate, o.api_mode, subtitle_cache.digest(o.api_url),
             tostring(o.api_temperature), o.font_name, extra or ''})
+    elseif o.use_segment and o.segment_silence then
+        -- Keep whole/fixed-slice identities intact; silence slicing has its own result.
+        identity = utils.format_json({'whisper-silence-v1', identity})
     end
     return subtitle_cache.entry(cache_root, identity)
 end
@@ -377,6 +381,16 @@ local function reset_session()
     for id in pairs(pending_jobs) do mp.abort_async_command(id) end
     for timer in pairs(pending_timers) do timer:kill() end
     pending_jobs, pending_timers = {}, {}
+    -- Incomplete progressive tracks must not survive cancellation or a new job.
+    if active_work then
+        local prefix = normalize(active_work):gsub('\\', '/'):lower():gsub('/+$', '') .. '/'
+        for _, track in ipairs(mp.get_property_native('track-list', {})) do
+            local path = track['external-filename']
+            if track.type == 'sub' and path and normalize(path):gsub('\\', '/'):lower():sub(1, #prefix) == prefix then
+                mp.commandv('sub-remove', track.id)
+            end
+        end
+    end
     cleanup_work(active_work)
     active_entry, active_work, subtitles_file = nil, nil, nil
     whisper_running, subtitles_written, gpt_api_enabled = false, false, false
@@ -413,7 +427,33 @@ local function parse_sub(filename)
     return subtitles
 end
 
-local function shift_subtitle_timestamps(temp_srt, srt_file, subtitle_count, start_time)
+local function shift_subtitle_timestamps(temp_srt, srt_file, subtitle_count, start_time, duration)
+    if duration then
+        -- Parse blocks so numeric dialogue is kept; clip backend overshoot at slice boundaries.
+        local data = subtitle_cache.read(temp_srt)
+        if data ~= '' and not subtitle_cache.valid_srt(data) then return nil end
+        local output = {}
+        for block in ((data or ''):gsub('\r\n', '\n'):gsub('^\239\187\191', '') .. '\n\n'):gmatch('(.-)\n%s*\n') do
+            if block:match('%S') then
+                local first, last, words = block:match('^%s*%d+\n(%d%d:%d%d:%d%d,%d%d%d)%s+%-%->%s+(%d%d:%d%d:%d%d,%d%d%d)[^\n]*\n(.+)$')
+                local from = math.min(timestamp_to_seconds(first), duration)
+                local to = math.min(timestamp_to_seconds(last), duration)
+                if from < to then
+                    output[#output + 1] = tostring(subtitle_count) .. '\n' ..
+                        seconds_to_timestamp(start_time + from) .. ' --> ' .. seconds_to_timestamp(start_time + to) .. '\n' ..
+                        words:gsub('%s+$', '') .. '\n\n'
+                    subtitle_count = subtitle_count + 1
+                end
+            end
+        end
+        local file = io.open(srt_file, 'ab')
+        if not file then return nil end
+        local wrote = file:write(table.concat(output))
+        local closed = file:close()
+        if not wrote or not closed then return nil end
+        os.remove(temp_srt)
+        return subtitle_count
+    end
     local temp_file = io.open(temp_srt, "r")
     local main_file = io.open(srt_file, "a")
 
@@ -944,31 +984,30 @@ local function fastwhisper()
 end
 ------------------------
 
-local function extract_audio_segment(video_path, segment_audio_file, start_time, duration)
+local function audio_segment_args(video_path, segment_audio_file, start_time, duration, audio_map, detect_silence)
     local args = {
-        "ffmpeg",
+        ffmpeg_path,
         "-hide_banner",
         "-nostdin",
         "-y",
-        "-loglevel", "quiet",
-        "-i", video_path,
+        "-loglevel", detect_silence and "info" or "error",
         "-ss", tostring(start_time),
+        "-i", video_path,
         "-t", tostring(duration),
-        "-map", string.format("a:%s?", mp.get_property_number("current-tracks/audio/id", 0) - 1),
+        "-map", audio_map,
         "-vn",
         "-sn",
-        "-c:a", "copy",
-        segment_audio_file
+        "-ac", "1", "-ar", "16000",
     }
-
-    local res = mp.command_native({ name = "subprocess", capture_stdout = true, capture_stderr = true, args = args })
-
-    if not res or res.status ~= 0 then
-        msg.error("Error extracting audio segment: " .. segment_audio_file .. "\n" .. tostring(res and res.stderr))
-        return false
+    if detect_silence then
+        args[#args + 1] = '-af'
+        args[#args + 1] = 'asetpts=PTS-STARTPTS,silencedetect=noise=-35dB:d=0.25'
+        args[#args + 1] = '-f'; args[#args + 1] = 'null'
+    else
+        args[#args + 1] = '-c:a'; args[#args + 1] = 'pcm_s16le'
     end
-    msg.verbose("Successfully extracted: " .. segment_audio_file)
-    return true
+    args[#args + 1] = segment_audio_file
+    return args
 end
 
 local function process_audio_segment(segment_audio_file, subtitle_count)
@@ -990,21 +1029,61 @@ end
 
 -- Progressive display: the first slice stays short so subtitles appear quickly,
 -- then later slices grow to cut per-slice model reloads. These constants do not
--- change the configured value, so the subtitle cache identity stays stable.
+-- change the configured value; fixed-slice cache identities stay stable.
 local FIRST_SEGMENT_SECONDS = 15
 local LATER_SEGMENT_SECONDS = 40
+local SILENCE_SEARCH_SECONDS = 3
+
+local function silence_boundary(log, window_start, target, lower, upper)
+    local silence_start, nearest
+    for line in (log or ''):gmatch('[^\r\n]+') do
+        local first = tonumber(line:match('silence_start:%s*([%d%.eE+%-]+)'))
+        local last = tonumber(line:match('silence_end:%s*([%d%.eE+%-]+)'))
+        if first then silence_start = first end
+        if last and silence_start then
+            local midpoint = window_start + (silence_start + last) / 2
+            if midpoint >= lower and midpoint <= upper and
+                (not nearest or math.abs(midpoint - target) < math.abs(nearest - target)) then
+                nearest = midpoint
+            end
+            silence_start = nil
+        end
+    end
+    return nearest
+end
 
 local function process_video_incrementally(video_path, srt_file, segment_duration)
     local start_time = 0
     local subtitle_count = 1
     local segment_index = 1
-    local temp_srt = nil
     local file_duration = mp.get_property_number('duration')
-    if not file_duration or file_duration <= 0 then return false end
-
-    while true do
+    local track = mp.get_property_native('current-tracks/audio', {})
+    local audio_map = track['ff-index'] and ('0:' .. track['ff-index']) or '0:a:0'
+    local token, job_work = generation, active_work
+    local function stop(reason)
+        whisper_running = false
+        publish_status()
+        mp.osd_message('AI 字幕分段生成失败，未保存为完成缓存', 5)
+        msg.error('AI subtitle segment failed: ' .. tostring(reason))
+    end
+    local function run(args, callback)
+        recognition_job = mp.command_native_async({name = 'subprocess', capture_stdout = true,
+            capture_stderr = true, args = args}, function(ok, result)
+            if token ~= generation then cleanup_work(job_work); return end
+            recognition_job = nil
+            if not ok or not result or result.status ~= 0 then
+                stop(result and ('exit ' .. tostring(result.status) .. ': ' .. tostring(result.stderr)) or 'subprocess failed'); return
+            end
+            callback(result)
+        end)
+    end
+    local next_segment
+    next_segment = function()
         if start_time >= file_duration then
-            break
+            if finish_recognition(srt_file) and gpt_api_enabled then translate_srt_file(subtitles_file) end
+            whisper_running = false
+            publish_status()
+            return
         end
         local slice
         if segment_index == 1 then
@@ -1025,35 +1104,33 @@ local function process_video_incrementally(video_path, srt_file, segment_duratio
             os.remove(temp_srt_file)
         end
 
-        local start_time_str = string.format("%02d:%02d:%02d", math.floor(start_time / 3600), math.floor(start_time / 60) % 60, start_time % 60)
-        msg.verbose(string.format("Extracting segment: %d, Start Time: %s", segment_index, start_time_str))
-
-        local success = extract_audio_segment(video_path, segment_audio_file, start_time_str, slice)
-        if not success or not file_exists(segment_audio_file) then
-            msg.verbose("Audio extraction completed or failed.")
-            return false
+        local function recognize_slice()
+            msg.info(string.format('AI subtitle segment: %d start=%.3f duration=%.3f', segment_index, start_time, slice))
+            run(audio_segment_args(video_path, segment_audio_file, start_time, slice, audio_map), function()
+                if not file_exists(segment_audio_file) then stop('missing extracted audio'); return end
+                run(fastwhisper_cmd(segment_audio_file, temp_path), function()
+                    local count = shift_subtitle_timestamps(temp_srt_file, srt_file, subtitle_count, start_time, slice)
+                    if not count then stop('invalid or unwritable SRT output'); return end
+                    subtitle_count = count
+                    if subtitle_cache.valid_srt(subtitle_cache.read(srt_file)) then append_sub(srt_file) end
+                    start_time = start_time + slice
+                    segment_index = segment_index + 1
+                    next_segment()
+                end)
+            end)
         end
-
-        msg.verbose("Processing segment: " .. segment_audio_file)
-        local recognized
-        subtitle_count, temp_srt, recognized = process_audio_segment(segment_audio_file, subtitle_count)
-        if not recognized then return false end
-        if file_exists(temp_srt) then
-            subtitle_count = shift_subtitle_timestamps(temp_srt, srt_file, subtitle_count, start_time)
-        end
-
-        if file_exists(srt_file) then
-            if gpt_api_enabled then
-                translate_srt_file(srt_file)
-            else
-                append_sub(srt_file)
-            end
-        end
-
-        start_time = start_time + slice
-        segment_index = segment_index + 1
+        if not o.segment_silence or start_time + slice >= file_duration then recognize_slice(); return end
+        local lower = math.max(slice - SILENCE_SEARCH_SECONDS, slice / 2)
+        local upper = math.min(slice + SILENCE_SEARCH_SECONDS, file_duration - start_time)
+        if segment_index == 1 then upper = math.min(upper, FIRST_SEGMENT_SECONDS) end
+        run(audio_segment_args(video_path, '-', start_time + lower, upper - lower, audio_map, true), function(result)
+            local boundary = silence_boundary(result.stderr, lower, slice, lower, upper)
+            if boundary then slice = boundary end
+            msg.info(boundary and 'AI subtitle boundary: silence' or 'AI subtitle boundary: fixed fallback (no nearby silence)')
+            recognize_slice()
+        end)
     end
-    return true
+    next_segment()
 end
 
 local function fastwhisper_segment()
@@ -1066,14 +1143,8 @@ local function fastwhisper_segment()
     msg.info("AI subtitle generation in progress")
 
     whisper_running = true
-    local complete = process_video_incrementally(path, subtitles_file, o.segment_duration)
-    whisper_running = false
-
-    if complete and finish_recognition(subtitles_file) then
-        if gpt_api_enabled then translate_srt_file(subtitles_file) end
-    else
-        mp.osd_message('AI 字幕分段生成失败，未保存为完成缓存', 5)
-    end
+    publish_status()
+    process_video_incrementally(path, subtitles_file, o.segment_duration)
 end
 ------------------------
 
@@ -1202,6 +1273,16 @@ local function whisper(force)
     end
     local entry = current_entry()
     if not entry then mp.osd_message('请先打开媒体文件', 4); return end
+    if selected_backend == 'whisper' and o.use_segment and not is_protocol(mp.get_property('path')) then
+        local duration = mp.get_property_number('duration', 0)
+        if o.segment_duration <= 0 or o.segment_duration ~= o.segment_duration or o.segment_duration == math.huge or
+            duration <= 0 or duration == math.huge or duration ~= duration then
+            mp.osd_message('分段识别需要有限的正数时长与有效媒体长度', 5); return
+        end
+        if mp.get_property_native('current-tracks/audio', {}).external then
+            mp.osd_message('分段识别暂不支持外挂音轨，请选择内置音轨', 5); return
+        end
+    end
     if not force and load_cached(entry, false) then return end
     reset_session()
     if not begin_work(entry) then return end
