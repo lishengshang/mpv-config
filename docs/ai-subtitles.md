@@ -42,6 +42,8 @@ script-message-to sub_fastwhisper sub-fastwhisper-translation-cancel
 
 ## Qwen 部署与边界
 
+已有可信组件包时，可用 `tools/components.cmd` 一并安装 Whisper、Qwen 与媒体工具，并修复迁移路径，见[组件安装与迁移](config-checks.md#组件安装与迁移)。安装器将 Whisper 本地模型目录写入 `sub_fastwhisper-whisper_model_dir`；留空时沿用后端原有查找规则。Qwen 在中文路径下借助 Windows 短路径兼容 DyNet；禁用短文件名的目标卷请使用英文运行时目录。下面的源环境部署仍可单独使用。
+
 适配器为 `tools/qwen_subtitles.py`，使用 Python 3.12.12、PyTorch 2.8.0+cu128、官方 `qwen-asr==0.0.6` 的 Transformers 后端，CUDA / bfloat16 / SDPA / batch=1。默认每段不超过 20 秒，优先在静音处切分；`qwen_chunk_seconds` 可设为 2–30。先完成识别并释放模型，再加载官方 ForcedAligner 0.6B 校时，避免两模型同时占显存。按对齐时间和标点断句，保留识别标点；它生成原语言字幕，翻译仍沿用现有可选 API。
 
 目前 Qwen 接入只支持本地媒体的内置音轨，按 mpv 当前音轨抽取音频；网络媒体和外挂音轨请切回 Whisper。Qwen 自行分片，不使用 Whisper 的 `use_segment` / `segment_duration` / `compute_type` / `model` 选项。生成期间播放其他 GPU 增强会争用显存；显存不足时本次任务失败，不自动换模型或后端。

@@ -26,6 +26,8 @@ jobs:
         run: python tools/test_release.py
       - name: Offline subtitle adapter regression
         run: python tools/test_qwen_asr.py
+      - name: Component archive and migration regression
+        run: python tools/test_components.py
       - name: Offline GPU dependency probe regression
         run: python tools/test_gpu_probe.py
       - name: GPU verifier failure handling (native integration skipped without mpv)

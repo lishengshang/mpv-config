@@ -90,6 +90,11 @@ def main():
     if language == 'auto':
         language = ''
     local = (CONFIG / 'local.conf').read_text(encoding='utf-8')
+    runtime_opts = []
+    for key in ('whisper_model_dir', 'ffmpeg_path'):
+        match = re.search(r'^\s*script-opts-append=sub_fastwhisper-' + key + '=(.+)$', local, re.M)
+        if match:
+            runtime_opts.append('sub_fastwhisper-' + key + '=' + match[1].strip())
     qwen_opts = []
     if args.engine == 'qwen':
         for key in ('qwen_python', 'qwen_model', 'qwen_aligner'):
@@ -162,6 +167,7 @@ def main():
             'asr-playback-second=' + second.as_posix(),
             'asr-playback-render=' + ('yes' if args.render else 'no'),
             'asr-playback-segment=' + ('yes' if args.segment else 'no')]
+    opts.extend(runtime_opts)
     opts.extend(qwen_opts)
     opts.append('asr-playback-timeout=' + str(args.timeout))
     if args.menu_switch:

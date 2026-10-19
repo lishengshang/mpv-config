@@ -126,6 +126,12 @@ def timed_cues(text, items, offset, duration, width):
 
 
 def run(args):
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        from qwen_runtime import prepare_import_paths
+    finally:
+        sys.path.pop(0)
+    prepare_import_paths()
     os.environ['HF_HUB_OFFLINE'] = '1'
     os.environ['TRANSFORMERS_OFFLINE'] = '1'
     os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'

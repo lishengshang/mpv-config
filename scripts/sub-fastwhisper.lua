@@ -28,6 +28,7 @@ local o = {
     -- https://github.com/Purfview/whisper-standalone-win
     -- Supports absolute and relative paths
     fast_whisper_path = "faster-whisper",
+    whisper_model_dir = '',
     -- Model to use, available models are: base, small，medium, large, large-v2, large-v3, turbo
     model = "base",
     -- Device to use, available devices are: cpu, cuda
@@ -84,6 +85,7 @@ options.read_options(o, _, function() end)
 ------------------------
 
 local fast_whisper_path = mp.command_native({ "expand-path", o.fast_whisper_path })
+local whisper_model_dir = o.whisper_model_dir ~= '' and mp.command_native({'expand-path', o.whisper_model_dir}) or ''
 local selected_backend = o.backend == 'qwen' and 'qwen' or 'whisper'
 mp.set_property_native('user-data/ai-subtitles/backend', selected_backend)
 local qwen_python = mp.command_native({'expand-path', o.qwen_python})
@@ -209,6 +211,10 @@ local function current_entry(extra)
     elseif o.use_segment and o.segment_silence then
         -- Keep whole/fixed-slice identities intact; silence slicing has its own result.
         identity = utils.format_json({'whisper-silence-v2', identity})
+    end
+    if selected_backend == 'whisper' and whisper_model_dir ~= '' then
+        local model = utils.file_info(utils.join_path(whisper_model_dir, 'faster-whisper-' .. o.model .. '/model.bin')) or {}
+        identity = utils.format_json({'whisper-local-model-v1', identity, whisper_model_dir, tostring(model.size or ''), tostring(model.mtime or '')})
     end
     return subtitle_cache.entry(cache_root, identity)
 end
@@ -679,6 +685,7 @@ local function fastwhisper_cmd(file_path, sub_path)
         "--output_dir", sub_path,
         "--output_format", "srt",
     }
+    if whisper_model_dir ~= '' then args[#args + 1] = '--model_dir'; args[#args + 1] = whisper_model_dir end
 
     if o.language ~= "" then
         table.insert(args, "--language")

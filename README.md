@@ -31,6 +31,7 @@ PS：自行编辑文本时使用 UTF-8、LF；脚本选项的注释单独占行�
 - **AI 字幕**：`Alt+f` 或菜单“字幕 → 下载／生成”，默认 Whisper，可选 Qwen；管理、重新生成、缓存与导出见 [AI 字幕](docs/ai-subtitles.md)。
 - **HDR 与蓝光 ISO**：`toggleHDR` 按视频类型自动切换 Windows HDR 显示模式并在播放结束后恢复，需 [HDRTray](https://github.com/res2k/HDRTray/releases) 的 `HDRCmd.exe`，路径写在 `local.conf`（模板见 [local.conf.example](local.conf.example)），未配置则不接管；`auto_bluray` 把拖入或命令行传入的 `.iso` 改走 `bd://` 播放，只认扩展名、不处理 BDMV 文件夹，非蓝光 ISO 会打开失败。
 - **维护与诊断**：菜单“工具与高级 → 维护”，提供脚本与着色器更新预览、组件诊断和播放采样；操作与结果解释见 [配置检查](docs/config-checks.md)。
+- **组件安装与迁移**：双击 `tools/components.cmd` 检查、从固定清单安装 VS/Whisper/Qwen，或修复搬家后的路径；[用法与限制](docs/config-checks.md#组件安装与迁移)。
 
 全局选项见 [mpv.conf](mpv.conf)，配置组见 [profiles.conf](profiles.conf)，脚本参数位于 [script-opts/](script-opts/)，着色器位于 [shaders/](shaders/)。[archive/](archive/) 为历史归档，不是默认启用区。
 

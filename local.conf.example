@@ -17,6 +17,8 @@
 # 下载:https://github.com/Purfview/whisper-standalone-win/releases （用 Faster-Whisper-XXL_r245.4_windows.7z，
 # 约 1.4GB，解压后约 2.5GB；首次运行还会下载 Whisper 模型约 1.6GB。最新的 XXL Pro r3.256.1 是收费闭源版，别用）
 #script-opts-append=sub_fastwhisper-fast_whisper_path=C:\path\to\faster-whisper-xxl.exe
+# 组件部署工具会设置离线模型目录，避免迁移后重新下载模型。
+#script-opts-append=sub_fastwhisper-whisper_model_dir=C:/path/to/whisper/_models
 
 # 可选字幕翻译：兼容 Chat Completions 的接口，curl 需支持 --fail-with-body。
 # 配置 key 后，AI 识别完成会继续翻译；不配置时仅生成原文字幕。

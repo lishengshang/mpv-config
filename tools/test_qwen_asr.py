@@ -1,7 +1,11 @@
 """Adapter tests that do not load a model or require CUDA."""
 from types import SimpleNamespace
+import ctypes
+from ctypes import wintypes  # Load before tests temporarily replace sys.path.
 import unittest
+from unittest.mock import patch
 from qwen_subtitles import chunks, language_name, stamp, timed_cues
+import qwen_runtime
 
 
 def item(text, start, end):
@@ -9,6 +13,25 @@ def item(text, start, end):
 
 
 class AdapterTests(unittest.TestCase):
+    def test_windows_unicode_import_uses_ascii_alias(self):
+        def get_short(value, buffer, size):
+            buffer.value = 'C:/SHORT~1/site-packages'
+            return len(buffer.value)
+        with patch.object(qwen_runtime.os, 'name', 'nt'), patch.object(qwen_runtime.os.path, 'exists', return_value=True), \
+                patch.object(ctypes, 'WinDLL', return_value=SimpleNamespace(GetShortPathNameW=get_short), create=True), \
+                patch.object(qwen_runtime.sys, 'path', ['C:/中文/site-packages', 'C:/ascii']):
+            qwen_runtime.prepare_import_paths()
+            self.assertEqual(qwen_runtime.sys.path, ['C:/SHORT~1/site-packages', 'C:/ascii'])
+
+    def test_windows_missing_short_names_fails_clearly(self):
+        def get_short(value, buffer, size):
+            return 0
+        with patch.object(qwen_runtime.os, 'name', 'nt'), patch.object(qwen_runtime.os.path, 'exists', return_value=True), \
+                patch.object(ctypes, 'WinDLL', return_value=SimpleNamespace(GetShortPathNameW=get_short), create=True), \
+                patch.object(qwen_runtime.sys, 'path', ['C:/中文/site-packages']):
+            with self.assertRaisesRegex(RuntimeError, 'ASCII component destination'):
+                qwen_runtime.prepare_import_paths()
+
     def test_chunk_boundaries_cover_audio_once(self):
         self.assertEqual(list(chunks(46, [12, 18, 37], 20)), [(0, 18), (18, 37), (37, 46)])
 

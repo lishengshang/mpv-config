@@ -31,6 +31,8 @@
 
 ## 安装可选 VS
 
+已有可信离线组件清单时，可双击 `tools/components.cmd` 检查、安装 VS 或修复搬家路径，详见[组件安装与迁移](config-checks.md#组件安装与迁移)。不同内容的已有 DLL 会阻止安装，避免覆盖播放器自带依赖；需选择与播放器兼容的组件包。
+
 仅复制配置不能获得 VS。优先复用匹配的整套便携运行时；上游入口：[mpv_PlayKit Releases](https://github.com/hooke007/mpv_PlayKit/releases) 的 NVIDIA `vsNV` 组件、[便携 Python/VS](https://github.com/hooke007/dotfiles/releases/tag/mpv_addones)、[部署说明](https://github.com/hooke007/mpv_PlayKit/wiki/3_K7sfunc)。发行资产以该页为准。
 
 已有本机增强包：解压到 `mpv.exe` 同级，不多套一层目录。上游包：先完整解压到独立临时目录，再双击 `tools/install-vs-runtime.cmd` 导入；工具只复制运行时，不覆盖上游/本项目配置，已有 VS 的目标目录会拒绝混装。预览：

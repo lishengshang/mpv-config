@@ -32,6 +32,7 @@ Windows workflow `.github/workflows/config-check.yml` 在 `dev`/`master` push、
 ```powershell
 python tools/test_check_config.py ReferenceChecks WiringChecks
 python tools/test_qwen_asr.py
+python tools/test_components.py
 python tools/test_gpu_probe.py
 python tools/test_verify_gpu.py
 python tools/check_config.py
@@ -72,13 +73,38 @@ python tools/test_release.py
 
 干净且已提交的源码可去掉 `--allow-dirty`。`stage`、`check`、`archive`、`check-archive`、`publish` 的完整参数见各自 `--help`；编译脚本 `tools/build-release-msys2.sh` 只在 CI 的 UCRT64 环境执行，不在日常播放器目录安装编译器。`publish` 是实际远端写入命令，日常自检不调用。
 
-首个候选仍是播放器及配置，`components` 目录清单尚未填入已验收的分包；`pending_components` 明确列出 VS、Whisper、Qwen 的待办。不能称为离线完整版，也不能把本机 `.venv` 直接塞入包。后续组件用独立固定版本/哈希/兼容范围，不随每次 mpv 更新重复上传模型；完整离线包须在组件全部通过后组装。
+公开候选仍是播放器及配置，`release/manifest.json` 的 `components` 清单尚未填入公开分包。下方工具已支持本机快照的固定清单、安装和迁移；本机验收不代表候选包或干净机器通过，当前不能称为公开离线完整版。
 
 转正式版前，使用最终下载的候选包和选定组件完成启动/媒体/菜单/切片/重置、每个提供的 VS 预设产帧及 shader 渲染、Whisper/Qwen 真实字幕/缓存/取消、路径迁移和干净机器验收。把硬件、版本、组件和未覆盖项记入 Release 说明，保留原始证据；之后在 GitHub 编辑该预发布，取消 Pre-release 并设置 Latest。流程不自动做此晋级。
 
 2026-10-16 来源核对：官方 `v0.41.0` Windows MinGW 包可以通过本项目原生命令解析，但 `--vf=help` 没有 `vapoursynth`，不能作为当前全功能版的直接替换；外层 ZIP 还含一个内层 ZIP。构建结果以对应 Actions 运行及 Release 附件为准；本地脚本或离线回归通过不等于正式源码构建已通过。
 
 依据：[mpv 正式发布](https://github.com/mpv-player/mpv/releases)、[官方 MSYS2 CI](https://github.com/mpv-player/mpv/blob/v0.41.0/ci/build-msys2.sh)、[GitHub 定时事件](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)。
+
+## 组件安装与迁移
+
+双击 `tools/components.cmd`，选择检查、安装或修复迁移路径。安装时选择可信离线包中的 `catalog.json`；也支持 HTTPS 清单。播放器目录必须已有 `mpv.exe` 与当前版本的 `portable_config`，工具不替换播放器或公共配置。命令行示例：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/components.ps1 -Action Status
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/components.ps1 -Action Install -Catalog X:/offline/catalog.json
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/components.ps1 -Action Configure -MpvRoot X:/moved-player
+python tools/components.py status --mpv-root X:/moved-player --hashes
+# 从已安装且可运行的环境导出；输出目录须不存在，运行时与模型源保持原位
+python tools/components.py export --output X:/offline-components
+```
+
+导出读取本机 `local.conf` 的后端/模型路径，以及配置的或 PATH 中的 FFmpeg/FFprobe，生成包含安装器、引导 Python 和四个分包的清单；私人配置、token、用户字幕缓存和 TRT 引擎缓存不在导出范围。Qwen 从原 venv 或已迁移环境取依赖，另配完整 Python、相对 `._pth` 和本地 VC++ 库；迁移包不保留原 venv 的绝对 Python 路径。导出可能占用数十 GB，须遵守各组件原许可；此入口不会自动发布资产。
+
+安装按整包和逐文件 SHA256 验证，并在暂存区与最终目录执行原生探针。VS 只允许运行时目录和明确的根目录文件；Whisper/Qwen/媒体工具放在播放器的 `components/<组件>/<固定版本>/`。目标无需已有 Python：引导器从同一可信清单取固定哈希的小型 Python，此时检查也需提供清单。安装 Whisper/Qwen 自动补齐 FFmpeg/FFprobe；没有清单不安装组件，不猜测最新版或自动下载大模型。
+
+同内容文件复用，不同内容文件拒绝覆盖；这也可能阻止与发行播放器自带 DLL 冲突的 VS 快照安装，需先选择匹配运行时。单个组件提交失败只回滚该组件本轮新建文件，已成功安装的其他组件保留，失败暂存留作诊断。安装记录位于 `state/components/`，路径只写忽略的 `local.conf`，原配置先备份，私人接口设置保留。整体移动播放器目录后运行“修复迁移路径”，按记录重新定位并探测组件。不要在安装期间启动播放器；中断遗留的锁应先核查对应进程和暂存，再处理。
+
+检查项确认 VS 实际基础帧、Qwen 本地导入/CUDA、Whisper CLI/本地模型和媒体工具；Whisper 探针不执行推理，模型/原生探针通过也不代替 GPU 预设与字幕实际验收。Qwen 的 DyNet 依赖不支持中文导入目录，工具与识别适配器会使用 Windows 的 ASCII 短路径；若目标卷禁用短文件名且路径含非 ASCII 字符，须选择英文运行时目录，工具会明确报错。当前本机快照面向 Windows x64 / NVIDIA，其他系统、GPU、驱动、干净机器和公开候选的兼容性需另验。原始证据保存在忽略的 `cache/component-audit/`。
+
+2026-10-19 本机组件验收：RTX 4070 Laptop 8GB / 驱动 616.92，独立播放器先在没有 Python 的目录中通过引导器安装 VS，再安装媒体工具、Whisper 和 Qwen；离线分包约 19.3 GiB，展开约 24.4 GiB。整套播放器移到含中文和空格的新路径后，修复路径并逐文件复核 45,954 个负载文件的哈希通过，Qwen 确认使用包内独立 Python 3.12.12 / Torch 2.8.0+cu128。最终 PowerShell 检查入口四组件均 READY。
+
+迁移目录中 Bilateral / RIFE TRT 各输出 3 张有效 PNG；Whisper 分段识别、取消、下一文件、缓存复用与 Qwen 菜单切换识别均通过，另补测显式离线模型目录。三组字幕回归均正常退出、无遗留后端进程，截图已目视检查；两种 VS 的采样输入为 640×360/30fps 合成图，字幕使用已知英文合成语音，不作为真实课程准确率或稳定性能结论。摘要为 `cache/component-audit/migration.json`、`whisper-model-dir.json`、`moved-status.json`，原始报告/日志/截图已复制到其 `evidence/` 子目录。15 项组件离线回归、11 项 Qwen 适配回归通过；CI 接入尚待远端执行。
 
 ## 菜单与设置保留回归
 
