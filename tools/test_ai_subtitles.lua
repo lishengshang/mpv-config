@@ -57,6 +57,10 @@ local function boot(media, overrides)
             for index, track in ipairs(state['track-list']) do
                 if track.id == tonumber(a) then table.remove(state['track-list'], index); break end
             end
+        elseif name == 'sub-reload' and settings.reassign_sub_id then
+            for _, track in ipairs(state['track-list']) do
+                if track.id == tonumber(a) then track.id = track.id + 100 end
+            end
         end
         return true
     end
@@ -212,12 +216,113 @@ local function suite()
         'manual translation never writes next to selected source subtitle')
     local translated
     for _, command in ipairs(commands) do
-        if command[1] == 'sub-add' and command[2]:find('%.translate%.srt$') then translated = command[2] end
+        if command[1] == 'sub-add' and command[2]:find('%.translate%.srt$') then
+            translated = command[2]
+            check(command[3] == 'select', 'manual translation explicitly selects its subtitle track')
+        end
     end
     check(translated and translated:gsub('\\', '/'):find('/results/', 1, true) and
         cache.valid_srt(cache.read(translated)), 'translated SRT is in cache')
     check(cache.read(translated .. '.complete') == cache.digest(cache.read(translated)),
         'translation completion checksum recorded')
+    hooks.on_unload()
+    boot(a, {api_key = 'mock-only', api_mode = 'translation-failure-regression'})
+    state.sub = {external = true, ['external-filename'] = external}
+    handlers['sub-translate']()
+    jobs[1].callback(true, {status = 0, stdout = utils.format_json({error = {message = 'Unauthorized'}})})
+    local failed_translation
+    for _, command in ipairs(commands) do
+        if command[1] == 'sub-add' and command[2]:find('%.translate%.srt$') then failed_translation = command[2] end
+    end
+    check(not failed_translation or not cache.read(failed_translation .. '.complete'),
+        'API failure must not mark original text as completed translation')
+    handlers['sub-translate']()
+    check(#jobs == 2, 'explicit translation retries failed API request')
+    jobs[2].callback(true, {status = 0, stdout = utils.format_json({choices = {{message = {
+        content = '00:00:00,000 --> 00:00:02,000 | Retried translation.'}}}})})
+    local retried
+    for _, command in ipairs(commands) do
+        if command[1] == 'sub-add' and command[2]:find('%.translate%.srt$') then retried = command[2] end
+    end
+    check(retried and cache.read(retried .. '.complete'), 'successful retry completes translation')
+    hooks.on_unload()
+    for index, response in ipairs({{choices = {{}}}, {choices = {{message = {content = {}}}}},
+        {choices = {{message = {content = ''}}}},
+        {choices = {{message = {content = '00:00:00,000 --> 00:00:02,000 | One.\nExtra commentary.'}}}},
+        {choices = {{message = {content = '00:00:02,000 --> 00:00:03,000 | Wrong timestamp.'}}}}}) do
+        boot(a, {api_key = 'mock-only', api_mode = 'translation-invalid-' .. index})
+        state.sub = {external = true, ['external-filename'] = external}
+        handlers['sub-translate']()
+        jobs[1].callback(true, {status = 0, stdout = utils.format_json(response)})
+        local result
+        for _, command in ipairs(commands) do
+            if command[1] == 'sub-add' and command[2]:find('%.translate%.srt$') then result = command[2] end
+        end
+        check(not result, 'malformed API response cannot install a translated subtitle')
+        hooks.on_unload()
+    end
+    boot(a, {api_key = 'mock-only', api_mode = 'translation-order', reassign_sub_id = true})
+    local ordered = path('translation-input/ordered.srt')
+    check(cache.write(ordered, good .. '2\n00:00:02,000 --> 00:00:04,000\nAnother cue.\n\n'), 'ordered fixture')
+    state.sub = {external = true, ['external-filename'] = ordered}
+    handlers['sub-translate']()
+    jobs[1].callback(true, {status = 0, stdout = utils.format_json({choices = {{message = {
+        content = '00:00:00,000 --> 00:00:02,000 | First.\n00:00:02,000 --> 00:00:04,000 | Second.'}}}})})
+    local ordered_result
+    for _, command in ipairs(commands) do
+        if command[1] == 'sub-add' and command[2]:find('%.translate%.srt$') then ordered_result = command[2] end
+    end
+    check(cache.read(ordered_result) == '1\n00:00:00,000 --> 00:00:02,000\nFirst.\n\n' ..
+        '2\n00:00:02,000 --> 00:00:04,000\nSecond.\n\n', 'translated cues keep source order')
+    local last = commands[#commands]
+    local current_id
+    for _, track in ipairs(state['track-list']) do
+        if track['external-filename']:find('%.ass$') then current_id = track.id end
+    end
+    check(last[1] == 'set' and last[2] == 'sid' and tonumber(last[3]) == current_id,
+        'reload selects newly allocated subtitle track ID')
+    local before = #jobs
+    handlers['sub-translate']()
+    check(#jobs == before, 'repeated completed translation makes no new API request')
+    hooks.on_unload()
+    boot(a, {api_key = 'mock-only', api_mode = 'translation-order'})
+    state.sub = {external = true, ['external-filename'] = ordered}
+    handlers['sub-translate']()
+    check(#jobs == 0, 'completed translation is reused across player sessions')
+    hooks.on_unload()
+    boot(a, {api_key = 'mock-only', api_mode = 'translation-cancel'})
+    state.sub = {external = true, ['external-filename'] = external}
+    handlers['sub-translate']()
+    local late_translation = jobs[1].callback
+    hooks.on_unload()
+    local command_count = #commands
+    late_translation(true, {status = 0, stdout = utils.format_json({choices = {{message = {
+        content = '00:00:00,000 --> 00:00:02,000 | Cancelled output.'}}}})})
+    check(aborted[1] and #commands == command_count, 'cancel ignores late translation API callback')
+    hooks.on_unload()
+    boot(a, {api_key = 'mock-only', api_mode = 'translation-parallel'})
+    local parallel, source_cues, expected_cues, replies = path('translation-input/parallel.srt'), {}, {}, {{}, {}}
+    for i = 1, 21 do
+        local timestamp = string.format('00:00:%02d,000 --> 00:00:%02d,000', i - 1, i)
+        source_cues[i] = i .. '\n' .. timestamp .. '\nSource ' .. i .. '.\n\n'
+        expected_cues[i] = i .. '\n' .. timestamp .. '\nTranslation ' .. i .. '.\n\n'
+        table.insert(replies[i <= 20 and 1 or 2], timestamp .. ' | Translation ' .. i .. '.')
+    end
+    check(cache.write(parallel, table.concat(source_cues)), 'parallel translation fixture')
+    state.sub = {external = true, ['external-filename'] = parallel}
+    handlers['sub-translate']()
+    check(#jobs == 2, 'translation dispatches multiple batches')
+    for _, i in ipairs({2, 1}) do
+        jobs[i].callback(true, {status = 0, stdout = utils.format_json({choices = {{message = {
+            content = table.concat(replies[i], '\n')}}}})})
+    end
+    local parallel_result
+    for _, command in ipairs(commands) do
+        if command[1] == 'sub-add' and command[2]:find('%.translate%.srt$') then parallel_result = command[2] end
+    end
+    check(cache.read(parallel_result) == table.concat(expected_cues), 'out-of-order callbacks keep complete source timeline')
+    check(cache.read(parallel_result .. '.complete') == cache.digest(cache.read(parallel_result)),
+        'multiple batches finish with one valid completion checksum')
     hooks.on_unload()
     boot(a)
     events['file-loaded']()

@@ -18,6 +18,12 @@
 # 约 1.4GB，解压后约 2.5GB；首次运行还会下载 Whisper 模型约 1.6GB。最新的 XXL Pro r3.256.1 是收费闭源版，别用）
 #script-opts-append=sub_fastwhisper-fast_whisper_path=C:\path\to\faster-whisper-xxl.exe
 
+# 可选字幕翻译：兼容 Chat Completions 的接口，curl 需支持 --fail-with-body。
+# 配置 key 后，AI 识别完成会继续翻译；不配置时仅生成原文字幕。
+#script-opts-append=sub_fastwhisper-api_url=https://your-provider.example/v1/chat/completions
+#script-opts-append=sub_fastwhisper-api_mode=your-model
+#script-opts-append=sub_fastwhisper-api_key=your-private-key
+
 # Qwen3-ASR 备选：独立 Python 3.12 环境和本地模型；不复用 VS Python。
 #script-opts-append=sub_fastwhisper-qwen_python=C:/path/to/qwen-asr/.venv/Scripts/python.exe
 #script-opts-append=sub_fastwhisper-qwen_model=C:/path/to/qwen-asr/models/Qwen3-ASR-1.7B

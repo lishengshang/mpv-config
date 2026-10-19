@@ -106,6 +106,7 @@ local subtitle_count = 1
 local append_subtitle_count = 1
 local in_progress_batches = 0
 local translated_batches_count = 0
+local translation_source
 local subtitles_written = false
 local whisper_running = false
 local gpt_api_enabled = false
@@ -318,11 +319,14 @@ local function append_sub(sub_file, auto)
         if auto then
             mp.commandv('sub-add', sub_file, 'auto')
         else
-            mp.commandv('sub-add', sub_file)
+            mp.commandv('sub-add', sub_file, 'select')
         end
     else
+        local selected = mp.get_property('sid', 'no') == tostring(id)
         mp.commandv('sub-reload', id)
-        if not auto then mp.commandv('set', 'sid', tostring(id)) end
+        -- mpv may allocate a new track ID during reload; the old ID can select "no".
+        local present, current_id = check_sub(sub_file)
+        if present and (not auto or selected) then mp.commandv('set', 'sid', tostring(current_id)) end
     end
 end
 
@@ -395,6 +399,7 @@ local function reset_session()
     active_entry, active_work, subtitles_file = nil, nil, nil
     whisper_running, subtitles_written, gpt_api_enabled = false, false, false
     start_index, in_progress_batches, translated_batches_count = 1, 0, 0
+    translation_source = nil
     time_ranges, progress_cache, translated_cache, state = {}, {}, {}, {}
     mp.set_osd_ass(0, 0, '')
     publish_status()
@@ -593,7 +598,9 @@ local function call_gpt_api(subtitles, callback)
     if not o.api_key or o.api_key:match('^%s*$') then return nil end
     msg.info("AI subtitle translation in progress")
     local prompt = string.format("You are a professional translation assistant, " ..
-    "Translate the following subtitles from the original language to %s.", o.translate)
+    "Translate the following subtitles from the original language to %s. " ..
+    "Return exactly one line per input cue, preserving its timestamp and | separator. " ..
+    "Do not add commentary, Markdown, or extra lines.", o.translate)
 
     local request_body = {
         messages = {
@@ -613,11 +620,17 @@ local function call_gpt_api(subtitles, callback)
     local request_json = utils.format_json(request_body)
 
     local command = {
-        "curl", "-s", "--connect-timeout", "10", "--max-time", "60", "-X", "POST", o.api_url,
+        "curl", "-s", "--fail-with-body", "--connect-timeout", "10", "--max-time", "60", "-X", "POST", o.api_url,
         "-H", "Content-Type: application/json",
         "-H", "Authorization: Bearer " .. o.api_key,
         "-d", request_json
     }
+    local function response_content(data)
+        local response = utils.parse_json(data or '')
+        local choice = type(response) == 'table' and type(response.choices) == 'table' and response.choices[1]
+        local content = type(choice) == 'table' and type(choice.message) == 'table' and choice.message.content
+        if type(content) == 'string' and content:match('%S') then return content end
+    end
 
     if not callback then
         local result = mp.command_native({
@@ -632,9 +645,9 @@ local function call_gpt_api(subtitles, callback)
             return nil
         end
 
-        local response = utils.parse_json(result.stdout)
-        if response and response.choices and #response.choices > 0 then
-            return response.choices[1].message.content
+        local content = response_content(result.stdout)
+        if content then
+            return content
         else
             msg.info("Unable to parse API response")
             return nil
@@ -657,9 +670,9 @@ local function call_gpt_api(subtitles, callback)
             return
         end
 
-        local response = utils.parse_json(result.stdout)
-        if response and response.choices and #response.choices > 0 then
-            callback(response.choices[1].message.content)
+        local content = response_content(result.stdout)
+        if content then
+            callback(content)
         else
             msg.info("Unable to parse API response")
             callback(nil)
@@ -713,6 +726,12 @@ local function translate_and_write(subtitles, subtitles_file)
     local delay_between_calls = 60 / max_calls_per_minute
     local translated_file = subtitles_file:gsub("%.srt$", ".translate.srt")
     local total_batches = math.ceil(#subtitles / batch_size)
+    local function fail_batch(first, last, reason)
+        for i = first, last do progress_cache[subtitles[i].timestamp] = nil end
+        in_progress_batches = in_progress_batches - 1
+        msg.warn('Translation failed: ' .. reason)
+        mp.osd_message('字幕翻译失败，保留原字幕；请检查接口后重试。', 5)
+    end
 
     -- Dynamically calculate parallelism
     local function calculate_parallel_calls()
@@ -733,7 +752,7 @@ local function translate_and_write(subtitles, subtitles_file)
             local subtitle = subtitles[i]
             -- Only process untranslated subtitles
             if not translated_cache[subtitle.timestamp] and not progress_cache[subtitle.timestamp] then
-                table.insert(batch, subtitle.timestamp .. " | " .. subtitle.text)
+                table.insert(batch, subtitle.timestamp .. " | " .. subtitle.text:gsub('[\r\n]+', ' '))
                 progress_cache[subtitle.timestamp] = true  -- Mark as in translation
             end
         end
@@ -751,8 +770,8 @@ local function translate_and_write(subtitles, subtitles_file)
         local cancel = call_gpt_api(batch_text, function(translated_text)
             -- Handle API call failure
             if not translated_text then
-                msg.warn("Translation failed, skipping current batch")
-                translated_text = batch_text
+                fail_batch(batch_start_index, end_index, 'API response unavailable')
+                return
             end
 
             -- Split the translated text into lines
@@ -763,19 +782,12 @@ local function translate_and_write(subtitles, subtitles_file)
 
             -- Ensure the number of translated lines matches the original batch
             if #translated_lines ~= #batch then
-                msg.warn("Mismatch: Original=" .. #batch .. ", Translated=" .. #translated_lines)
-            end
-
-            -- Open the file for appending the translated subtitles
-            local file = io.open(translated_file, "a")
-            if not file then
-                msg.error("Unable to open file: " .. translated_file)
+                fail_batch(batch_start_index, end_index, 'response cue count mismatch')
                 return
             end
 
             -- Write the translated subtitles to the file
             local latest_content = {}
-            local current_index = batch_start_index
             for i = 1, #translated_lines do
                 local translated_line = translated_lines[i]
                 local timestamp, text = translated_line:match("(%d+:%d+:%d+[%.,:]%d+%D+%d+:%d+:%d+[%.,:]%d+)%s*(.*)$")
@@ -786,11 +798,8 @@ local function translate_and_write(subtitles, subtitles_file)
 
                 -- Handle translation failure
                 if not timestamp or not text or text == "" then
-                    local subtitle = subtitles[batch_start_index + i - 1]
-                    if subtitle then
-                        timestamp = subtitle.timestamp
-                        text = subtitle.text
-                    end
+                    fail_batch(batch_start_index, end_index, 'invalid translated cue')
+                    return
                 end
 
                 if timestamp and text then
@@ -805,22 +814,32 @@ local function translate_and_write(subtitles, subtitles_file)
                         msg.warn("Invalid timestamp: " .. timestamp)
                     end
 
+                    local expected = subtitles[batch_start_index + i - 1]
+                    if not expected or timestamp ~= expected.timestamp or latest_content[timestamp] then
+                        fail_batch(batch_start_index, end_index, 'response timestamps changed or reordered')
+                        return
+                    end
                     latest_content[timestamp] = text
                 end
             end
 
-            for timestamp, text in pairs(latest_content) do
-                -- Cache the translated result
-                translated_cache[timestamp] = text
-                -- Remove from the in-progress cache
-                progress_cache[timestamp] = nil
-                -- Write to file
-                file:write(current_index .. "\n")
-                file:write(timestamp .. "\n")
-                file:write(text .. "\n\n")
-                current_index = current_index + 1
+            -- Concurrent callbacks must serialize in source order, never Lua hash order.
+            local serialized, current_index = {}, 1
+            for _, subtitle in ipairs(subtitles) do
+                local text = latest_content[subtitle.timestamp] or translated_cache[subtitle.timestamp]
+                if text then
+                    serialized[#serialized + 1] = current_index .. '\n' .. subtitle.timestamp .. '\n' .. text .. '\n\n'
+                    current_index = current_index + 1
+                end
             end
-            file:close()
+            if not subtitle_cache.write(translated_file, table.concat(serialized)) then
+                fail_batch(batch_start_index, end_index, 'cannot write translated subtitles')
+                return
+            end
+            for timestamp, text in pairs(latest_content) do
+                translated_cache[timestamp] = text
+                progress_cache[timestamp] = nil
+            end
 
             -- Update translated batch count
             translated_batches_count = translated_batches_count + 1
@@ -870,6 +889,8 @@ end
 -- Translate .srt file
 local function translate_srt_file(subtitles_file)
     if not o.api_key or o.api_key:match('^%s*$') then return end
+    -- A failed request can be retried explicitly after the current batches finish.
+    if in_progress_batches == 0 then start_index = 1 end
     if not subtitles_file then
         subtitles_file = get_current_sub()
     end
@@ -891,7 +912,24 @@ local function translate_srt_file(subtitles_file)
         subtitles_file = entry.srt
     end
 
+    local translated = subtitles_file:gsub('%.srt$', '.translate.srt')
+    local completed = subtitle_cache.read(translated)
+    if subtitle_cache.valid_srt(completed) and
+        subtitle_cache.read(translated .. '.complete') == subtitle_cache.digest(completed) then
+        generate_ass(subtitles_file)
+        return
+    end
+
     -- Parse the original subtitle file
+    if translation_source ~= subtitles_file then
+        if in_progress_batches > 0 then
+            mp.osd_message('请先等待当前字幕翻译完成，或取消当前任务。', 5)
+            return
+        end
+        translation_source = subtitles_file
+        translated_cache, progress_cache = {}, {}
+        start_index, translated_batches_count = 1, 0
+    end
     local subtitles = parse_srt(subtitles_file)
     if not subtitles then
         msg.error("Failed to parse .srt file")
