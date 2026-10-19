@@ -123,6 +123,15 @@ python tools/test_player_health.py
 
 工具保留根配置选项，只加载 GPU 控制器与采样脚本，关闭音频并固定 1280×720 窗口；不代表所有日常脚本/音频同步开启时的结果。`--minimal` 跳过根配置，报告仍记录实际滤镜与后端。真实文件会在增强初始化后重新定位到 `--start`，再按相同预热采样；无有效输出、进程失败、无日志或采样中断均失败。每次输出 JSON、播放器日志和视频截图；逐项比较相同片源/起点/窗口/根配置与驱动条件的报告，不用合成源排名代替真实基线。重型预设可能编译引擎，工具仅在明确传入 `--preset` 时启用。
 
-菜单对应 `player_health` 消息：`health-menu`、`health-diagnose`、`health-sample [2..120 秒]`、`health-cancel`、`health-open-reports`。本地实现为 `scripts/player-health.lua`，无默认采样快捷键。真实片源由用户稍后指定，当前只做工具与合成回归。
+菜单对应 `player_health` 消息：`health-menu`、`health-diagnose`、`health-sample [2..120 秒]`、`health-cancel`、`health-open-reports`。本地实现为 `scripts/player-health.lua`，无默认采样快捷键。真实课程采样见下方记录，其他片源需另行采样。
 
 2026-10-16 本机 RTX 4070 Laptop 8GB / mpv `v0.41.0-1017-g02a595ddc`：`cache/player-health/test-20261016-153821-867973/report.json` 通过 10 项真实播放/诊断断言，覆盖有效采样与暂停、切片、跳转、滤镜变化、手动取消失效；本机五个诊断任务和九个文件检查均通过。720p/1080p/2160p 合成源各 3 秒采样通过（`benchmark-20261016-153641-069724/`、`153654-426284/`、`153704-669119/`）；同一合成 MKV 的默认/Bilateral 指定起点流程通过（`153842-983232/`、`153750-284759/`）。这些是工具回归，不作为性能排名或真实影片基线。
+
+2026-10-19 真实课程基线：同机 RTX 4070 Laptop 8GB / 驱动 616.92 / 上述日常播放器；单个 1280×720/22fps H.264 中文数学课程，从 60 秒处分别定位，预热 2 秒后各采样 30 秒。根配置、固定 1280×720 窗口、D3D11、`d3d11va-copy`，只加载 GPU 控制器与采样脚本、关闭音频。两组都保留根配置的 `FSRCNNX_x1_16-0-4-1_distort.glsl` 与 `SSimDownscaler.glsl`，默认组没有菜单增强，Bilateral 组增加 `NR_BILATERAL_CUDA`：
+
+| 方案 | VO P50 / P95（ms） | 时间推进比 | VO / 解码丢帧 / VO 延迟增量 |
+| --- | --- | --- | --- |
+| 默认（无菜单增强） | 4.169 / 4.221 | 1.001390 | 0 / 0 / 0 |
+| Bilateral | 4.278 / 4.766 | 1.001284 | 0 / 0 / 0 |
+
+两组采样有效、退出码 0、无错误级日志，截图已目视检查；原文件大小/修改时间/SHA256 和同级目录列表不变。汇总为 `cache/player-health/course-baseline-20261019/summary.json`，原报告分别为 `benchmark-20261019-140635-044113/report.json` 与 `benchmark-20261019-140710-689551/report.json`。VO 数据不包含完整 VS/解码流水线；该静态板书课程的单次短采样不代表电影、1080p/4K、其他重型预设、音画同步或主观画质结论。

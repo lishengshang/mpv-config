@@ -119,6 +119,7 @@ local function owned_filter()
     end
 end
 local baseline, applied_shader, pending, generation = nil, nil, nil, 0
+local paused_placeholder
 local suspended = nil      -- 对比快照：{id=预设, shader=布尔, path=滤镜文件}
 local expected_shaders     -- 脚本自身最后一次写入的 shader 列表（用于区分内部写入与外部改写）
 local describe, menu_hint, enough_upscale, source_state  -- 定义在 missing() 之后
@@ -175,6 +176,7 @@ end
 local function cancel(rollback)
     local restored, reason = true, nil
     generation = generation + 1
+    paused_placeholder = nil
     if pending then
         local old = pending
         pending = nil
@@ -561,13 +563,35 @@ mp.register_script_message('clear-shaders', function()
     say(ok and '着色器已清空。' or ('清空失败：' .. tostring(err)))
 end)
 mp.enable_messages('error')
+local function update_message_level()
+    -- Paused seeks can reinitialize an already active VS filter. Observe its
+    -- initialization logs while paused, without debug traffic during playback.
+    local initializing = pending and pending.stage == 'init'
+    mp.enable_messages((initializing or (owned_filter() and mp.get_property_native('pause', false))) and 'debug' or 'error')
+end
+local function refresh_paused_frame(id, token)
+    if not mp.get_property_native('pause', false) then return end
+    mp.add_timeout(0.1, function()
+        if token == generation and not pending and selected() == id and
+            mp.get_property_native('pause', false) then
+            mp.commandv('frame-step')
+            mp.msg.info('GPU refreshed paused VS dummy frame: ' .. id)
+        end
+    end)
+end
 local initialized
 mp.register_event('log-message', function(event)
     local f = owned_filter()
     if not f or (event.prefix ~= 'vapoursynth' and
         not (event.prefix == 'vf' and event.text:find(label, 1, true))) then return end
     local job = pending
-    if job and job.stage == 'init' and event.prefix == 'vapoursynth' and
+    if event.prefix == 'vapoursynth' and
+        event.text:match('^Returning black dummy frame with 0 duration%.') then
+        if job and job.stage == 'init' then job.dummy_frame = true
+        elseif not job and selected() then paused_placeholder = {id = selected(), token = generation} end
+        return
+    end
+    if event.prefix == 'vapoursynth' and
         event.text:match('^initialized%.%s*$') then
         initialized()
         return
@@ -592,17 +616,29 @@ mp.register_event('log-message', function(event)
 end)
 initialized = function()
     local job = pending
+    if not job then
+        local placeholder = paused_placeholder
+        paused_placeholder = nil
+        if placeholder then refresh_paused_frame(placeholder.id, placeholder.token) end
+        return
+    end
     if not job or job.stage ~= 'init' or job.failure then return end
     local restored, reason = restore_shader()
     if not restored then cancel(); say('shader 恢复失败，已恢复原滤镜：' .. tostring(reason)); return end
     job.timer:kill()
     pending = nil
     suspended = nil          -- 新方案已生效：结束旧方案的对比状态
-    mp.enable_messages('error')
+    update_message_level()
+    if job.dummy_frame and mp.get_property_native('pause', false) then
+        -- VS can display a zero-duration placeholder while initializing. A seek
+        -- rebuilds VS and can repeat it; step once after init, staying paused.
+        refresh_paused_frame(job.id, generation)
+    end
     say('已启用：' .. presets[job.id].label .. '\n' .. describe(presets[job.id]) ..
         '\n流畅度尚未评估：可对比开关前后的帧率，或先用“暂时关闭，对比效果”判断。')
 end
-mp.observe_property('vf', 'native', publish)
+mp.observe_property('vf', 'native', function() publish(); update_message_level() end)
+mp.observe_property('pause', 'bool', update_message_level)
 mp.observe_property('glsl-shaders', 'native', function()
     local list = shaders()
     -- 本脚本自己的写入不算外部改写（对比切换、方案切换、恢复都走 set_shaders）。

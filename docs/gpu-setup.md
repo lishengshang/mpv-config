@@ -85,9 +85,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/export-vs-addon.ps1
 ..\python.exe tools/test_gpu_ux.py --case playback --paused
 ..\python.exe tools/test_gpu_ux.py --case no-vs
 ..\python.exe tools/test_gpu_ux.py --case failure
+# 使用独立空缓存验证首次 shader 编译；保留日常缓存
+python tools/test_gpu_ux.py --case playback --paused --source-width 640 --cold-shader-cache --timeout 1800
+# 复用上一轮报告中的缓存验证普通播放（替换为实际报告目录）
+python tools/test_gpu_ux.py --case playback --source-width 640 --shader-cache-dir 'cache/gpu-ux/<上一轮报告目录>/shader-cache'
 ```
 
-播放测试只加载 uosc、GPU 脚本和输入绑定，日志/截图在 `cache/gpu-ux/`；默认 1280×720/30fps，不覆盖全部日常脚本。小尺寸暂停切换回归：`python tools/test_gpu_ux.py --case playback --paused --source-width 640 --focused`；覆盖 RIFE、DRBA、两种 ArtCNN、MIX、用户滤镜保留与下一文件，不等待 shader 编译。去掉 `--paused` 比较普通播放。原全序列仍可执行，但首次 shader 编译可能远超普通切换耗时。
+播放测试只加载 uosc、GPU 脚本和输入绑定，日志/截图在 `cache/gpu-ux/`；默认 1280×720/30fps，不覆盖全部日常脚本。小尺寸暂停切换回归：`python tools/test_gpu_ux.py --case playback --paused --source-width 640 --focused`；覆盖 RIFE、DRBA、两种 ArtCNN、MIX、用户滤镜保留与下一文件，不等待 shader 编译。去掉 `--paused` 比较普通播放。全序列中的暂停测试还覆盖 MIX 激活后的 seek，并核对每次截图时仍处于暂停状态。
+
+测试不以 PNG 文件存在代替有效画面：解码 RGB/RGBA 8/16 位 PNG 的前 32 行，检查合成测试图应有的彩色像素，拒绝 VS 初始化占位黑帧；该规则只用于此处无黑边的 `testsrc2`，不用于判断真实影片的黑场。首次 shader 编译可能远超普通切换耗时，可用 `--timeout` 增加原生进程的总时限；VS 单项初始化时限仍由 GPU 脚本独立管理。`--cold-shader-cache` 仅让 mpv shader 缓存为空，不清除驱动或 TRT 引擎缓存；`--shader-cache-dir` 用于显式复用缓存，二者互斥。
 
 导出产物在 `cache/packages/`：基础配置 ZIP、`mpv-VS-RTX-addon.7z` 与 SHA256。需要 Git/7-Zip；配置排除私人文件/缓存，VS 包不含配置和引擎缓存。它是本机组件快照，使用前核对附带 SHA256 与上游许可；旧包不自动包含后续代码修改。
 
@@ -99,13 +105,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/export-vs-addon.ps1
 
 `vf add` 返回成功及 `video-reconfig` 都可能早于实际 VS 初始化；脚本等待明确完成日志后才确认应用，之后监听错误。不同 mpv 版本缺少完成信号会超时回滚。shader 提示“已启用”仅表示列表设置成功，实际渲染以画面/自检为准。
 
+暂停时，mpv 的 VS 接口可能在初始化期间显示零时长黑色占位帧。GPU 脚本在检测到该占位帧并确认初始化结束后补取一帧，保持暂停；也处理已启用 VS 的暂停 seek。取消、重置、换文件或换方案会使旧刷新失效，执行前还会核对仍处于暂停状态。此处读取暂停期间的 VS 初始化日志，普通播放不持续订阅 debug 消息。
+
 ## 历史验证边界
+
+2026-10-19 本机 RTX 4070 Laptop 8GB / 驱动 616.92 / mpv `v0.41.0-1017-g02a595ddc`：640×360/30fps 合成测试图、1280×720 窗口、D3D11、只加载 uosc/GPU 控制器/测试脚本，完成 12 个 RTX VS 与两个 ArtCNN shader 的完整序列：
+
+- 首轮旧工具仅检查 PNG 格式和大小，误将 MIX 暂停黑帧判为通过，原报告 `cache/gpu-ux/20261019-132029-playback-paused-640/` 不计验收。日志显示 VS 初始化返回零时长占位黑帧；单纯等待和同位置 seek 仍黑，补取一帧恢复，原始对照在 `cache/gpu-mix-paused-probe/`。本轮控制器修复和 PNG 内容检查见上方机制说明。
+- 最终版本使用独立空 mpv shader 缓存，暂停全序列通过 38 步，18 张预期截图均有彩色测试图，覆盖启用/替换/对比恢复/重置、用户滤镜保留、暂停 seek 及 VS/shader 下一文件；所有截图核对暂停状态，退出码 0、无错误级日志。目录 `cache/gpu-ux/20261019-134845-playback-paused-640/`，MIX seek 后截图已目视检查。
+- 同缓存普通播放全序列通过 37 步、17 张有效截图，退出码 0、无错误级日志，目录 `cache/gpu-ux/20261019-140509-playback-640/`。暂停故障注入通过 10 步、7 张有效截图，覆盖初始化失败和缺模型时保留原 shader/VS；目录 `cache/gpu-ux/20261019-140600-failure-paused-640/`，其中故意触发的 VS 异常为预期日志。
+- 冷缓存暂停流程至通过日志约 967.6 秒；C4F16 / C4F32 的截图及重置步骤分别等待 119.3 / 801.8 秒。普通播放复用缓存流程约 47.5 秒，步骤与暂停测试不同；这些耗时含编译、初始化、截图及固定等待，不是稳定帧率。未清空驱动/TRT 缓存。
+- 新增占位帧回归在旧控制器上失败，修复后 66 项 Lua 断言、8 项探针检查及 8 项验证器测试通过；PNG 回归覆盖彩色图、16 位 RGBA 黑帧、损坏和截断。未覆盖 DML、HDR、其他硬件、长时稳定性、主观画质及候选发行包。
 
 2026-10-17 UAI 类预设小尺寸修复：k7sfunc 动态 UAI 引擎的 `min_shapes=[384,384]` 在 640×360 源上会报 `no valid optimization profile found`（`k7sfunc/mod_mix.py` 的 `UAI_NV_TRT`）；`SR_AnimeJaNaiV2_TRT`、`SR_AnimeJaNaiV3_TRT`、`SR_HFA2k_TRT`、`SR_Anime1080Fixer_TRT` 改为任一边小于 384 像素时改用静态 TRT 引擎后，四个预设在 640 源、V2 另在 1280 源各实际输出三张 PNG（报告 `cache/gpu-check/20261017-081119-513318` 至 `20261017-081500-991172`，新引擎落在 `vs-plugins/models/`）。本次未重跑完整长序列、主观画质与实时性能。
 
 2026-10-16 小尺寸修复验收：RTX 4070 Laptop 8GB、既有运行时；普通 ArtCNN、Chroma、MIX 在 640×360 与 1280×720 各实际输出三张 PNG（`cache/gpu-check/20261016-152239-933577/` 至 `20261016-152247-552142/` 的六份报告）。RIFE → DRBA → ArtCNN → Chroma → MIX 的重置/用户滤镜保留/下一文件回归通过：640×360 暂停 `cache/gpu-ux/20261016-151908-playback-paused-focused-640/`、普通播放 `20261016-152249-playback-focused-640/`、1280×720 暂停 `20261016-152308-playback-paused-focused-1280/`。这些不等同长时稳定性或实时速度测试。
 
-原 2026-10-14 长序列被误记为 DRBA 失败；原日志显示 DRBA 已初始化并截图，真正形状错误在后续普通 ArtCNN。小于动态引擎最小形状时现使用静态引擎，见 VS 说明。本次原全序列停在 shader 首次编译，已停止，未计通过；shader 冷编译完整长序列仍未重新验收。
+原 2026-10-14 长序列被误记为 DRBA 失败；原日志显示 DRBA 已初始化并截图，真正形状错误在后续普通 ArtCNN。小于动态引擎最小形状时现使用静态引擎，见 VS 说明。
 
 继承 2026-10-14 的记录，提交 `3bc9548`、`fb42716`：RTX 4070 Laptop 8188MiB、驱动 616.92、mpv `v0.41.0-1017-g02a595ddc`、Python 3.14.4、VS R73、k7sfunc 1.8.1。
 
@@ -113,4 +129,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/export-vs-addon.ps1
 - 5 项自检故障回归通过。增强包完整性与独立目录 Bilateral/RIFE 迁移产帧通过；报告在 `cache/gpu-check/20261014-130129-942624/`、`cache/gpu-check/20261014-130133-369582/`。
 - 无 VS 基础目录的 C4F16 渲染通过，临时副本已清理；该副本报告不再保留。三个 DML、其他硬件、HDR、长时播放、主观画质和真实片源实时帧率未验证。
 
-本次文档精简没有重跑上述测试。证据缓存不随仓库分发，接手时核对文件或重跑；不能仅凭这份摘要宣布新环境通过。
+历史记录不代替新环境实测。证据缓存不随仓库分发，接手时核对文件或重跑；不能仅凭这份摘要宣布新环境通过。

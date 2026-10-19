@@ -300,6 +300,50 @@ local function suite()
     check(state.osd:find('正在准备') and active() == '' and state['user-data/gpu-effects'].compare == '',
         'compare is blocked while initializing')
 
+    -- 暂停时 VS 占位黑帧只刷新一次；旧任务、取消和恢复播放不得补步。
+    local function paused_dummy()
+        boot()
+        state.pause = true
+        handlers.toggle('MIX_SR_MEMC_TRT')
+        complete({ok = true})
+        hooks['log-message']({prefix = 'vapoursynth', level = 'warn', text = 'Returning black dummy frame with 0 duration.\n'})
+        local before = #timers
+        hooks['log-message']({prefix = 'vapoursynth', level = 'debug', text = 'initialized.\n'})
+        check(#timers == before + 1, 'paused dummy frame schedules one refresh after init')
+        return timers[#timers]
+    end
+    local refresh = paused_dummy()
+    local before = #commands
+    refresh.callback()
+    check(#commands == before + 1 and commands[#commands][1] == 'frame-step' and state.pause,
+        'dummy frame refresh requests a frame while keeping pause')
+    refresh = paused_dummy()
+    handlers.reset()
+    before = #commands
+    refresh.callback()
+    check(#commands == before, 'reset invalidates a queued dummy-frame refresh')
+    refresh = paused_dummy()
+    state.pause = false
+    before = #commands
+    refresh.callback()
+    check(#commands == before, 'resuming playback cancels the paused refresh')
+    boot()
+    state.pause = true
+    handlers.toggle('NR_BILATERAL_CUDA')
+    complete({ok = true})
+    before = #timers
+    hooks['log-message']({prefix = 'vapoursynth', level = 'debug', text = 'initialized.\n'})
+    check(#timers == before, 'paused initialization without dummy frames does not step')
+    hooks['log-message']({prefix = 'vapoursynth', level = 'warn', text = 'Returning black dummy frame with 0 duration.\n'})
+    before = #timers
+    hooks['log-message']({prefix = 'vapoursynth', level = 'debug', text = 'initialized.\n'})
+    check(#timers == before + 1, 'paused seek reinitialization refreshes an already active VS filter')
+    refresh = timers[#timers]
+    before = #commands
+    refresh.callback()
+    check(#commands == before + 1 and commands[#commands][1] == 'frame-step',
+        'paused seek replaces its zero-duration placeholder')
+
     -- 去色带是独立开关，不在恢复范围内
     boot()
     state.deband = true

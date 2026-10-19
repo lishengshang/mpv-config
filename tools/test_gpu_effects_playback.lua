@@ -1,13 +1,16 @@
 -- Actual command routing, video output and next-file regression.
 local utils = require 'mp.utils'
-local o = {no_vs = false, failure = false, all_rtx = false, focused = false, output = '~~/cache/ux-playback'}
+local o = {no_vs = false, failure = false, all_rtx = false, focused = false, paused = false, timeout = 900, output = '~~/cache/ux-playback'}
 require('mp.options').read_options(o, 'ux-test')
 local phase, step = 0, 0
+local restarts = 0
+mp.register_event('playback-restart', function() restarts = restarts + 1 end)
 local function status() return mp.get_property_native('user-data/gpu-effects', {}) end
 local function active(id) return status().active == id and status().pending == '' end
 local function check(ok, reason) if not ok then error(reason) end end
 local function send(action, id) mp.commandv('script-message-to', 'gpu_effects', action, id or '') end
 local function shot(name, mode)
+    check(mp.get_property_native('pause') == o.paused, 'capture preserves requested pause state: ' .. name)
     local path = mp.command_native({'expand-path', o.output .. '/' .. name .. '.png'})
     local ok, err = mp.commandv('screenshot-to-file', path, mode or 'video')
     check(ok, 'screenshot command: ' .. tostring(err))
@@ -82,6 +85,14 @@ else
             {'(', 'SR_HFA2k_TRT'}, {')', 'SR_Anime1080Fixer_TRT'}, {'ALT+_', 'MIX_SR_MEMC_TRT'}}) do
             local key, id = item[1], item[2]
             add(function() mp.commandv('keypress', key) end, function() return active(id) end)
+            if id == 'MIX_SR_MEMC_TRT' and o.paused then
+                local before_seek
+                add(function()
+                    shot('MIX-before-paused-seek')
+                    before_seek = restarts
+                    mp.commandv('seek', tostring(math.max(0, mp.get_property_number('time-pos') - 0.5)), 'absolute+exact')
+                end, function() return restarts > before_seek and active(id) end)
+            end
             add(function() shot(id); send('reset') end, function() return active('') end)
         end
     end
@@ -111,6 +122,7 @@ local function next_step()
         mp.commandv('loadfile', 'av://lavfi:testsrc2=size=640x360:rate=24,format=yuv420p', 'replace')
         return
     end
+    mp.msg.info('GPU UX STEP START: ' .. step)
     local ok, err = pcall(steps[step][1])
     if not ok then failure(err); return end
     local started = mp.get_time()
@@ -158,4 +170,4 @@ mp.register_event('file-loaded', function()
         end
     end)
 end)
-mp.add_timeout(900, function() failure('overall timeout') end)
+mp.add_timeout(o.timeout, function() failure('overall timeout') end)
