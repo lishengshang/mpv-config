@@ -5,7 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def main():
@@ -16,7 +16,7 @@ def main():
     shutil.copy2(folder / 'first.mkv', folder / 'second.mkv')
     command = [str(ROOT.parent / 'mpv.exe'), '--config-dir=' + str(ROOT), '--load-scripts=no',
                '--script=' + str(ROOT / 'scripts/uosc'), '--script=' + str(ROOT / 'scripts/player-health.lua'),
-               '--script=' + str(ROOT / 'tools/test_player_health.lua'), '--vo=gpu-next', '--gpu-api=d3d11',
+               '--script=' + str(ROOT / 'tools/tests/test_player_health.lua'), '--vo=gpu-next', '--gpu-api=d3d11',
                '--ao=null', '--osc=no', '--idle=yes', '--pause=no', '--input-ipc-server=',
                '--resume-playback=no', '--save-position-on-quit=no', '--geometry=1280x720', '--term-status-msg=',
                '--script-opts-append=health-test-output=' + folder.as_posix(),

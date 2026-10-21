@@ -5,7 +5,7 @@ import unittest
 import shutil
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'maintenance'))
 from check_config import CONFIG, Checker
 
 MPV = next((CONFIG.parent / name for name in ('mpv.com', 'mpv.exe') if (CONFIG.parent / name).is_file()), None)

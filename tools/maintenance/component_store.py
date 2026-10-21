@@ -272,7 +272,7 @@ def probe(kind, directory):
             'assert sys.prefix==sys.base_prefix; '
             'assert all(pathlib.Path(x).resolve().is_relative_to(p) for x in sys.path if x); '
             'assert (p/"msvcp140.dll").is_file(); ')
-        helper = str(Path(__file__).resolve().parent)
+        helper = str(Path(__file__).resolve().parents[1] / 'runtime')
         code = ('import sys; sys.path.insert(0,' + repr(helper) + '); '
                 'from qwen_runtime import prepare_import_paths; sys.path.pop(0); prepare_import_paths(); '
                 'import json,pathlib,torch,qwen_asr; '

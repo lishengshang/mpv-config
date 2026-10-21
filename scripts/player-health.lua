@@ -165,8 +165,8 @@ local function diagnose()
         report.files[#report.files + 1] = {component = pair[2] .. '/config.json (weights/inference untested)', exists = exists(path .. '/config.json')}
     end
     local checks = {
-        {'配置与原生接线', {python, expand('~~/tools/check_config.py'), '--mpv', '--json'}},
-        {'VS Bilateral 依赖初检', {python, expand('~~/tools/gpu_probe.py'), expand('~~/vs/NR_BILATERAL_CUDA.vpy')}},
+        {'配置与原生接线', {python, expand('~~/tools/maintenance/check_config.py'), '--mpv', '--json'}},
+        {'VS Bilateral 依赖初检', {python, expand('~~/tools/runtime/gpu_probe.py'), expand('~~/vs/NR_BILATERAL_CUDA.vpy')}},
         {'Qwen Python / CUDA（不加载模型）', {resolve(option('qwen_python', 'python')), '-c',
             'import json,torch,qwen_asr; print(json.dumps(dict(torch=torch.__version__,cuda=torch.cuda.is_available(),device=torch.cuda.get_device_name() if torch.cuda.is_available() else None)))'}},
         {'FFmpeg 可执行文件', {resolve(option('ffmpeg_path', 'ffmpeg')), '-version'}},

@@ -15,7 +15,7 @@ if (!(Test-Path -LiteralPath $python)) {
     Write-Host ('Expected: ' + $python)
     exit 2
 }
-$taskArgs = @((Join-Path $PSScriptRoot 'verify_gpu.py'), '--mpv-root', $MpvRoot,
+$taskArgs = @((Join-Path $PSScriptRoot 'maintenance/verify_gpu.py'), '--mpv-root', $MpvRoot,
               '--kind', $Kind, '--timeout', $Timeout, '--source-width', $SourceWidth)
 if ($Run) { $taskArgs += '--run' }
 if ($Preset) { $taskArgs += @('--preset', $Preset) }

@@ -7,7 +7,7 @@ import unittest
 import sys
 import tempfile
 from unittest.mock import patch
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'runtime'))
 from gpu_probe import model_paths, check
 
 
@@ -41,7 +41,7 @@ class Models(unittest.TestCase):
             self.resolve('k7f.ARTCNN_NV(clip, model=12345)')
 
     def test_current_presets_parse(self):
-        for p in (Path(__file__).resolve().parents[1] / 'vs').glob('*.vpy'):
+        for p in (Path(__file__).resolve().parents[2] / 'vs').glob('*.vpy'):
             ast.parse(p.read_text(encoding='utf-8-sig'))
 
     def probe(self, code, plugins):

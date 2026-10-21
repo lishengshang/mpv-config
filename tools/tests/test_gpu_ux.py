@@ -15,7 +15,7 @@ import subprocess
 import sys
 import zlib
 
-CONFIG = Path(__file__).resolve().parents[1]
+CONFIG = Path(__file__).resolve().parents[2]
 
 
 def inspect_testsrc_png(data):
@@ -125,7 +125,7 @@ def main():
         config = folder / 'portable_config'
         for part in ['scripts/uosc', 'shaders/ArtCNN']:
             shutil.copytree(CONFIG / part, config / part)
-        for part in ['scripts/gpu-effects.lua', 'tools/gpu_probe.py', 'input.conf']:
+        for part in ['scripts/gpu-effects.lua', 'tools/runtime/gpu_probe.py', 'input.conf']:
             (config / part).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(CONFIG / part, config / part)
         (config / 'vs').mkdir()
@@ -146,7 +146,7 @@ def main():
         opts.append('ux-test-focused=yes')
     args = [str(mpv_root / 'mpv.exe'), '--no-config', f'--config-dir={config}', '--load-scripts=no',
             f'--script={config / "scripts/uosc"}', f'--script={config / "scripts/gpu-effects.lua"}',
-            f'--script={CONFIG / "tools/test_gpu_effects_playback.lua"}', f'--input-conf={config / "input.conf"}',
+            f'--script={CONFIG / "tools/tests/test_gpu_effects_playback.lua"}', f'--input-conf={config / "input.conf"}',
             '--vo=gpu-next', '--gpu-api=d3d11', '--ao=null', '--hwdec=no', '--osc=no', '--idle=yes',
             '--resume-playback=no', '--save-position-on-quit=no', '--term-status-msg=',
             f'--osd-fonts-dir={CONFIG / "fonts"}',

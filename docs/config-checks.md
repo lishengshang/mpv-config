@@ -6,11 +6,37 @@
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/check-config.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/check-config.ps1 -Mpv
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/check-config.ps1 -Mpv -Verbose
-..\python.exe tools/check_config.py --json
-..\python.exe tools/test_check_config.py
+..\python.exe tools/maintenance/check_config.py --json
+..\python.exe tools/tests/test_check_config.py
 ```
 
 需要 Python 3.10+ 标准库；启动器优先使用 mpv 同级便携 Python，再找系统 Python。双击入口包含 mpv 原生检查，命令行默认离线；`-MpvRoot` 指定播放器目录，`-ConfigRoot` 指定配置目录，`-Json` 输出 JSON。
+
+## 工具目录
+
+`tools/` 按用途分组；普通使用从顶层 Windows 入口进入，无需逐个运行 Python 或 Lua 文件。
+
+| 位置 | 用途 |
+| --- | --- |
+| `tools/*.cmd`、`tools/*.ps1` | 双击、命令行操作入口；原有入口路径保持不变 |
+| `tools/runtime/` | 播放时按需调用的 Qwen 字幕适配、路径兼容和 GPU 依赖探针 |
+| `tools/maintenance/` | 配置检查、组件安装与迁移、GPU 验收和模型下载的内部实现 |
+| `tools/tests/` | Python/Lua 回归、真实播放验收及性能采样 |
+| `tools/release/` | 播放器发行编排与 MSYS2 构建脚本 |
+
+常用入口：
+
+| 操作 | 入口 |
+| --- | --- |
+| 检查配置 | 双击 `tools/check-config.cmd` |
+| 检查、安装组件或修复迁移路径 | 双击 `tools/components.cmd` |
+| 检查 GPU 实际输出 | 双击 `tools/verify-gpu.cmd`，可能触发耗时的首次编译 |
+| 导入已有 VS 运行时 | 双击 `tools/install-vs-runtime.cmd` |
+| 部署 Qwen 源环境 | `tools/setup-qwen-asr.ps1`，见 [字幕说明](ai-subtitles.md) |
+| 导出配置或本机 VS 包 | `tools/export-config.ps1`、`tools/export-vs-addon.ps1` |
+| 导出生成的字幕 | 播放器 AI 字幕管理菜单调用 `tools/export-ai-subtitle.ps1` |
+
+整理后直接执行 Python、Lua 或构建脚本的命令使用新子目录，本文及各功能说明已同步。播放器脚本和离线组件安装包也使用相同布局；复制或更新配置时保留整个 `tools/`，避免只复制顶层入口导致缺依赖。测试不会在日常启动时自动遍历执行。兼容边界与各操作参数见本页及对应功能说明。
 
 ## 检查范围
 
@@ -30,12 +56,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/check-config.ps1 -Mpv 
 Windows workflow `.github/workflows/config-check.yml` 在 `dev`/`master` push、PR 或手动触发时运行 Python 3.12：
 
 ```powershell
-python tools/test_check_config.py ReferenceChecks WiringChecks
-python tools/test_qwen_asr.py
-python tools/test_components.py
-python tools/test_gpu_probe.py
-python tools/test_verify_gpu.py
-python tools/check_config.py
+python tools/tests/test_check_config.py ReferenceChecks WiringChecks
+python tools/tests/test_qwen_asr.py
+python tools/tests/test_components.py
+python tools/tests/test_gpu_probe.py
+python tools/tests/test_verify_gpu.py
+python tools/maintenance/check_config.py
 ```
 
 CI 运行配置接线、字幕适配、GPU 依赖探针和验收工具失败判定的离线回归；`test_verify_gpu.py` 的两项原生集成在缺少本机 mpv 时跳过。CI 不下载 mpv、VS 或模型，不验证动态 handler、媒体与 GPU。需要原生输入检查时在本机加 `-Mpv`；GPU 产帧用 `tools/verify-gpu.ps1 -Run`。
@@ -60,18 +86,18 @@ Windows 构建参考 mpv 自身 MSYS2 CI，采用仍提供 mujs/rubberband 的 U
 
 流水线先跑离线回归，再构建与收集原生 DLL 依赖，随后执行配置原生解析和全脚本 CPU 播放检查：实际加载两个本地媒体、切换下一文件、恢复速度。使用精简 PATH、移除 Lua/Python/mpv 环境覆盖，从无关工作目录启动；缺能力、进程非零、日志缺失、错误级日志或缺成功标记均失败。检查后的文件摘要必须与归档前一致；最终 ZIP 再解压到含中文和空格的新位置复测，校验匹配才可发布。它不覆盖 D3D11 渲染、GPU 产帧、AI 推理或真实片源性能。
 
-从 r2 起额外检查 `secondary-sub-scale`，并对组装后的播放器执行全菜单回归：`tools/test_menu_ui.py --full --software-renderer --local-media`。CI 用本地 H.264/AAC 合成片段、D3D11 WARP 软件渲染和无增强 shader 的测试条件，提供菜单、次字幕字号、切片/重置及截图证据；不改变发行包默认画质。通过报告绑定播放器 SHA256，缺少或不匹配的 `menu-report.json` 不得发布。断言通过但进程退出异常仍失败；保留崩溃事件及 `unverified-player` 供诊断，不将其发布为候选。WARP 不替代 NVIDIA 实际渲染、VS 产帧和 AI 验收。r1 曾只通过 CPU 检查，缺少次字幕字号支持，已在该预发布说明中标为已知问题，不得晋级正式版。
+从 r2 起额外检查 `secondary-sub-scale`，并对组装后的播放器执行全菜单回归：`tools/tests/test_menu_ui.py --full --software-renderer --local-media`。CI 用本地 H.264/AAC 合成片段、D3D11 WARP 软件渲染和无增强 shader 的测试条件，提供菜单、次字幕字号、切片/重置及截图证据；不改变发行包默认画质。通过报告绑定播放器 SHA256，缺少或不匹配的 `menu-report.json` 不得发布。断言通过但进程退出异常仍失败；保留崩溃事件及 `unverified-player` 供诊断，不将其发布为候选。WARP 不替代 NVIDIA 实际渲染、VS 产帧和 AI 验收。r1 曾只通过 CPU 检查，缺少次字幕字号支持，已在该预发布说明中标为已知问题，不得晋级正式版。
 
 2026-10-16 的 r2 发行基线：云端流水线（含 WARP 105 项、正常退出及 ZIP 迁移）通过；公开 ZIP 校验后，本机 RTX 4070 Laptop 的 105 项菜单/双字幕/切片回归通过，退出码 0、错误日志为空。证据为 Release 附件及本机 `cache/release-audit/r2-published-rtx.json`；不包含 VS、ASR 或真实片源性能验收。
 
 本机只读检查上游（有未提交修改时生成不能构建/发布的审计计划）：
 
 ```powershell
-python tools/release.py plan --allow-dirty --output cache/release-audit/plan.json
-python tools/test_release.py
+python tools/release/release.py plan --allow-dirty --output cache/release-audit/plan.json
+python tools/tests/test_release.py
 ```
 
-干净且已提交的源码可去掉 `--allow-dirty`。`stage`、`check`、`archive`、`check-archive`、`publish` 的完整参数见各自 `--help`；编译脚本 `tools/build-release-msys2.sh` 只在 CI 的 UCRT64 环境执行，不在日常播放器目录安装编译器。`publish` 是实际远端写入命令，日常自检不调用。
+干净且已提交的源码可去掉 `--allow-dirty`。`stage`、`check`、`archive`、`check-archive`、`publish` 的完整参数见各自 `--help`；编译脚本 `tools/release/build-release-msys2.sh` 只在 CI 的 UCRT64 环境执行，不在日常播放器目录安装编译器。`publish` 是实际远端写入命令，日常自检不调用。
 
 公开候选仍是播放器及配置，`release/manifest.json` 的 `components` 清单尚未填入公开分包。下方工具已支持本机快照的固定清单、安装和迁移；候选与组件整合的本机实测见下方日期记录，干净机器尚未验收，当前不能称为公开离线完整版。
 
@@ -89,13 +115,13 @@ python tools/test_release.py
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/components.ps1 -Action Status
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/components.ps1 -Action Install -Catalog X:/offline/catalog.json
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/components.ps1 -Action Configure -MpvRoot X:/moved-player
-python tools/components.py status --mpv-root X:/moved-player --hashes
+python tools/maintenance/components.py status --mpv-root X:/moved-player --hashes
 # 从已安装且可运行的环境导出；输出目录须不存在，运行时与模型源保持原位
-python tools/components.py export --output X:/offline-components
+python tools/maintenance/components.py export --output X:/offline-components
 # 把本机离线快照整理成适合 Release 的分卷；输出目录须不存在
-python tools/components.py prepare --catalog X:/offline-components/catalog.json --output X:/transport-components
+python tools/maintenance/components.py prepare --catalog X:/offline-components/catalog.json --output X:/transport-components
 # 以选定候选播放器适配已核对的 VS 共享依赖，并在暂存区执行原生探针
-python tools/components.py prepare --catalog X:/offline-components/catalog.json --output X:/candidate-components --vs-player X:/candidate/MPV
+python tools/maintenance/components.py prepare --catalog X:/offline-components/catalog.json --output X:/candidate-components --vs-player X:/candidate/MPV
 ```
 
 导出读取本机 `local.conf` 的后端/模型路径，以及配置的或 PATH 中的 FFmpeg/FFprobe，生成包含安装器、引导 Python 和四个分包的清单；私人配置、token、用户字幕缓存和 TRT 引擎缓存不在导出范围。Qwen 从原 venv 或已迁移环境取依赖，另配完整 Python、相对 `._pth` 和本地 VC++ 库；迁移包不保留原 venv 的绝对 Python 路径。导出可能占用数十 GB，须遵守各组件原许可；此入口不会自动发布资产。
@@ -113,7 +139,7 @@ python tools/components.py prepare --catalog X:/offline-components/catalog.json 
 在选定的独立播放器配置目录中，可从安装后的启动器验证实际 GPU 入口；完整序列会初始化重型预设，冷缓存可能长时间编译：
 
 ```powershell
-python tools/test_gpu_ux.py --case playback --paused --source-width 640 --cold-shader-cache --timeout 1800 --launcher ../mpv-components.cmd
+python tools/tests/test_gpu_ux.py --case playback --paused --source-width 640 --cold-shader-cache --timeout 1800 --launcher ../mpv-components.cmd
 ```
 
 同内容文件复用，不同内容文件拒绝覆盖；这也可能阻止与发行播放器自带 DLL 冲突的 VS 快照安装，需先选择匹配运行时。单个组件提交失败只回滚该组件本轮新建文件，已成功安装的其他组件保留，失败暂存留作诊断。安装记录位于 `state/components/`，路径只写忽略的 `local.conf`，原配置先备份，私人接口设置保留。整体移动播放器目录后运行“修复迁移路径”，按记录重新定位并探测组件。不要在安装期间启动播放器；中断遗留的锁应先核查对应进程和暂存，再处理。
@@ -134,7 +160,7 @@ python tools/test_gpu_ux.py --case playback --paused --source-width 640 --cold-s
 
 ## 菜单与设置保留回归
 
-`python tools/test_menu_ui.py --full` 加载日常脚本，经真实导航/回车检查菜单、状态、切片与恢复；隔离历史及 IPC，禁用测试网络弹幕。进程失败、错误级日志、缺少报告或截图均判失败。
+`python tools/tests/test_menu_ui.py --full` 加载日常脚本，经真实导航/回车检查菜单、状态、切片与恢复；隔离历史及 IPC，禁用测试网络弹幕。进程失败、错误级日志、缺少报告或截图均判失败。
 
 `CTRL+R` 或菜单“工具与高级 → 播放设置 → 下一文件的设置保留策略”中的“保留全部更改”使用空重置列表。`no` 不是可重置选项名，会在切片时报错，不能作为关闭值。配置默认仍使用原有常用列表，立即恢复操作独立于保留策略。[mpv 选项说明](https://mpv.io/manual/master/#options-reset-on-next-file)。
 
@@ -150,7 +176,7 @@ python tools/test_gpu_ux.py --case playback --paused --source-width 640 --cold-s
 - 备份在 `cache/manager/backups/`，`manifest.json` 对应目标、状态及原始 `.old` 文件。手动恢复前先退出播放器；备份不自动清理、不随发布包分发。
 - 更新后重启播放器。预览/取消入口分别为 `script-message-to manager manager-update-all`、`script-message-to manager manager-cancel`；应用入口为 `script-message-to manager manager-apply`，必须先在当前进程预览。
 
-本地维护实现为 `scripts/manager.lua` 与 `script-modules/managed-update.lua`；更新其他脚本时保留这些修改。隔离本地 Git 源的回归：`python tools/test_manager.py`，不下载上游也不更新日常配置。
+本地维护实现为 `scripts/manager.lua` 与 `script-modules/managed-update.lua`；更新其他脚本时保留这些修改。隔离本地 Git 源的回归：`python tools/tests/test_manager.py`，不下载上游也不更新日常配置。
 
 ## 统一诊断与播放采样
 
@@ -164,13 +190,13 @@ python tools/test_gpu_ux.py --case playback --paused --source-width 640 --cold-s
 
 ```powershell
 # 合成片源冒烟回归；不是实际影片性能结论
-python tools/benchmark_playback.py --height 720 --seconds 5
-python tools/benchmark_playback.py --height 1080 --seconds 5
-python tools/benchmark_playback.py --height 2160 --seconds 5
+python tools/tests/benchmark_playback.py --height 720 --seconds 5
+python tools/tests/benchmark_playback.py --height 1080 --seconds 5
+python tools/tests/benchmark_playback.py --height 2160 --seconds 5
 # 用户指定真实片源后，同一片段分别测默认配置与明确指定的增强
-python tools/benchmark_playback.py --media 'X:/media/sample.mkv' --start 60 --seconds 30
-python tools/benchmark_playback.py --media 'X:/media/sample.mkv' --start 60 --seconds 30 --preset NR_BILATERAL_CUDA
-python tools/test_player_health.py
+python tools/tests/benchmark_playback.py --media 'X:/media/sample.mkv' --start 60 --seconds 30
+python tools/tests/benchmark_playback.py --media 'X:/media/sample.mkv' --start 60 --seconds 30 --preset NR_BILATERAL_CUDA
+python tools/tests/test_player_health.py
 ```
 
 工具保留根配置选项，只加载 GPU 控制器与采样脚本，关闭音频并固定 1280×720 窗口；不代表所有日常脚本/音频同步开启时的结果。`--minimal` 跳过根配置，报告仍记录实际滤镜与后端。真实文件会在增强初始化后重新定位到 `--start`，再按相同预热采样；无有效输出、进程失败、无日志或采样中断均失败。每次输出 JSON、播放器日志和视频截图；逐项比较相同片源/起点/窗口/根配置与驱动条件的报告，不用合成源排名代替真实基线。重型预设可能编译引擎，工具仅在明确传入 `--preset` 时启用。

@@ -13,7 +13,7 @@ from threading import Thread
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_ai_subtitles import validate_timeline
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def main():
@@ -61,7 +61,7 @@ def main():
                '--resume-playback=no', '--save-position-on-quit=no', '--input-ipc-server=',
                '--term-status-msg=', '--msg-level=all=warn,sub_fastwhisper=info,test_subtitle_translation=info',
                '--script=' + str(ROOT / 'scripts/sub-fastwhisper.lua'),
-               '--script=' + str(ROOT / 'tools/test_subtitle_translation.lua'),
+               '--script=' + str(ROOT / 'tools/tests/test_subtitle_translation.lua'),
                '--script-opts-append=sub_fastwhisper-output_path=' + (folder / 'results').as_posix(),
                '--script-opts-append=translation-test-root=' + folder.as_posix(),
                '--script-opts-append=translation-test-target=' + args.target,

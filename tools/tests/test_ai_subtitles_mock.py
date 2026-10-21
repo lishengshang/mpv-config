@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import time
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def main():
@@ -16,7 +16,7 @@ def main():
         (folder / name).mkdir(parents=True)
         (folder / name / 'clip.wav').write_bytes(b'local identity fixture')
     command = [str(args.mpv), '--no-config', '--config-dir=' + str(ROOT), '--load-scripts=no',
-               '--script=' + str(ROOT / 'tools/test_ai_subtitles.lua'), '--idle=yes', '--vo=null', '--ao=null',
+               '--script=' + str(ROOT / 'tools/tests/test_ai_subtitles.lua'), '--idle=yes', '--vo=null', '--ao=null',
                '--input-ipc-server=', '--log-file=' + str(folder / 'player.log'),
                '--script-opts=asr-test-root=' + folder.as_posix() + ',asr-test-script=' + (ROOT / 'scripts/sub-fastwhisper.lua').as_posix()]
     with (folder / 'console.log').open('wb') as log:

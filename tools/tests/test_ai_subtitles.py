@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import time
 
-CONFIG = Path(__file__).resolve().parents[1]
+CONFIG = Path(__file__).resolve().parents[2]
 SHORT_SPEECH = 'This is a local subtitle cache test. The subtitles should stay in the cache folder.'
 LONG_SPEECH = (
     'This is a local subtitle cache test. The first sentence describes a quiet morning. '
@@ -144,7 +144,7 @@ def main():
     before = {str(p.parent): sorted(x.name for x in p.parent.iterdir()) for p in (first, second)}
     mock_args = [str(CONFIG.parent / 'mpv.exe'), '--no-config', '--config-dir=' + str(CONFIG),
                  '--load-scripts=no', '--idle=yes', '--vo=null', '--ao=null', '--term-status-msg=',
-                 '--script=' + str(CONFIG / 'tools/test_ai_subtitles.lua'),
+                 '--script=' + str(CONFIG / 'tools/tests/test_ai_subtitles.lua'),
                  '--script-opts=asr-test-root=' + folder.as_posix() +
                  ',asr-test-script=' + (CONFIG / 'scripts/sub-fastwhisper.lua').as_posix()]
     # Mock regression uses the same media identities but a separate result directory.
@@ -177,7 +177,7 @@ def main():
     log_path = folder / 'player.log'
     command = [str(CONFIG.parent / 'mpv.exe'), '--no-config', '--config-dir=' + str(CONFIG),
                '--load-scripts=no', '--script=' + str(CONFIG / 'scripts/sub-fastwhisper.lua'),
-               '--script=' + str(CONFIG / 'tools/test_ai_subtitles_playback.lua'),
+               '--script=' + str(CONFIG / 'tools/tests/test_ai_subtitles_playback.lua'),
                '--input-conf=' + str(CONFIG / 'input.conf'), '--script-opts=' + ','.join(opts),
                '--vo=null', '--ao=null', '--pause=yes', '--idle=yes', '--keep-open=yes',
                '--save-position-on-quit=no', '--resume-playback=no', '--term-status-msg=', '--input-ipc-server=',

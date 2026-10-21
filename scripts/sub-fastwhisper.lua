@@ -91,7 +91,7 @@ mp.set_property_native('user-data/ai-subtitles/backend', selected_backend)
 local qwen_python = mp.command_native({'expand-path', o.qwen_python})
 local qwen_model = mp.command_native({'expand-path', o.qwen_model})
 local qwen_aligner = mp.command_native({'expand-path', o.qwen_aligner})
-local qwen_runner = mp.command_native({'expand-path', '~~/tools/qwen_subtitles.py'})
+local qwen_runner = mp.command_native({'expand-path', '~~/tools/runtime/qwen_subtitles.py'})
 local ffmpeg_path = mp.command_native({'expand-path', o.ffmpeg_path})
 local cache_root = mp.command_native({ "expand-path",
     o.output_path == "source" and "~~/cache/ai-subtitles" or o.output_path })

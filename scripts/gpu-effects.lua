@@ -381,8 +381,8 @@ local function toggle(id)
         say('请先加载有视频轨的媒体，再选择画面增强。'); return
     end
     if p.shader then apply(p); return end
-    local probe = mp.command_native({'expand-path', '~~/tools/gpu_probe.py'})
-    if not file_exists(probe) then say('缺少依赖检查工具 tools/gpu_probe.py'); return end
+    local probe = mp.command_native({'expand-path', '~~/tools/runtime/gpu_probe.py'})
+    if not file_exists(probe) then say('缺少依赖检查工具 tools/runtime/gpu_probe.py'); return end
     local token = generation
     local job = {id = id, vf = filters(), shaders = shaders()}
     pending = job

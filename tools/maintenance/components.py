@@ -16,8 +16,16 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import component_store as store
 
-CONFIG = Path(__file__).resolve().parents[1]
+CONFIG = Path(__file__).resolve().parents[2]
 SKIP_DIRS = {'__pycache__', '.cache', '.git', '.temp', 'cache', 'logs'}
+
+
+def copy_installer(output):
+    for name in ('maintenance/components.py', 'maintenance/component_store.py',
+                 'components.ps1', 'components.cmd', 'runtime/qwen_runtime.py'):
+        target = output / 'tools' / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(CONFIG / 'tools' / name, target)
 
 
 def walk(source, prefix=''):
@@ -142,9 +150,7 @@ def export(args):
             raise ValueError('Installed component source missing: ' + str(path))
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    (output / 'tools').mkdir()
-    for name in ('components.py', 'component_store.py', 'components.ps1', 'components.cmd', 'qwen_runtime.py'):
-        shutil.copy2(CONFIG / 'tools' / name, output / 'tools' / name)
+    copy_installer(output)
     bootstrap = package('bootstrap', runtime_files(vs, bootstrap=True), output, bootstrap=True)
     info = subprocess.run([str(qwen_python), '-c',
         'import json,sys,importlib.metadata as m; print(json.dumps(dict(base=sys.base_prefix,prefix=sys.prefix,python=sys.version.split()[0],torch=m.version("torch"),qwen=m.version("qwen-asr"))))'],
@@ -159,8 +165,7 @@ def export(args):
                   package('whisper', walk(whisper), output, {'kind': 'installed Faster-Whisper-XXL with offline model'}),
                   package('qwen', qwen_files(base, site, models, vs, versions['python']), output, versions)]
     # Pick up final installer sources after potentially lengthy runtime compression.
-    for name in ('components.py', 'component_store.py', 'components.ps1', 'components.cmd', 'qwen_runtime.py'):
-        shutil.copy2(CONFIG / 'tools' / name, output / 'tools' / name)
+    copy_installer(output)
     store.atomic_json(output / 'catalog.json', dict(schema=1, generated=datetime.now().astimezone().isoformat(),
                                                   platform='windows-x86_64-nvidia', bootstrap=bootstrap, components=components))
     (output / 'install-components.cmd').write_text('@echo off\ncall "%~dp0tools\\components.cmd" %*\n', encoding='ascii', newline='\n')
@@ -274,9 +279,7 @@ def prepare(args):
                 source.unlink()
         prepared.append(result)
         print('PREPARED ' + item['id'], flush=True)
-    (output / 'tools').mkdir()
-    for name in ('components.py', 'component_store.py', 'components.ps1', 'components.cmd', 'qwen_runtime.py'):
-        shutil.copyfile(CONFIG / 'tools' / name, output / 'tools' / name)
+    copy_installer(output)
     (output / 'install-components.cmd').write_text('@echo off\ncall "%~dp0tools\\components.cmd" %*\n', encoding='ascii', newline='\n')
     for item in prepared:
         for asset in item.get('parts', [item]):

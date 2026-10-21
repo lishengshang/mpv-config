@@ -14,7 +14,7 @@ from unittest.mock import patch
 import zipfile
 from types import SimpleNamespace
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'maintenance'))
 import component_store as store
 import components
 
@@ -284,6 +284,14 @@ class ComponentTests(unittest.TestCase):
         self.assertTrue(all(p['bytes'] <= 100 for p in data['components'][0]['parts']))
         assembled = store.obtain(data['components'][0], base, self.base / 'downloads')
         self.assertEqual(assembled.read_bytes(), archive.read_bytes())
+        # The transported installer must work without the original checkout/cwd.
+        installer = output / 'tools/maintenance/components.py'
+        self.assertTrue((output / 'tools/runtime/qwen_runtime.py').is_file())
+        self.assertIn('maintenance/components.py', (output / 'tools/components.ps1').read_text())
+        result = subprocess.run([sys.executable, str(installer), '--help'], cwd=self.base,
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('configure', result.stdout)
         for line in (output / 'SHA256SUMS').read_text().splitlines():
             digest, name = line.split('  ', 1)
             self.assertEqual(store.digest(output / name), digest)

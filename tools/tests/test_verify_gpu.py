@@ -7,6 +7,7 @@ import zlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'maintenance'))
 from verify_gpu import CONFIG, evaluate, run_check
 from test_gpu_ux import inspect_testsrc_png
 

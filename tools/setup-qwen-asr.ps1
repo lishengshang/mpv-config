@@ -32,7 +32,7 @@ if (-not (Test-Path -LiteralPath $python)) { Invoke-Checked $basePython @('-m', 
 Invoke-Checked $uv @('pip', 'install', '--python', $python, 'torch==2.8.0', '--index-url', 'https://download.pytorch.org/whl/cu128', '--cache-dir', $cacheDir)
 Invoke-Checked $uv @('pip', 'install', '--python', $python, 'qwen-asr==0.0.6', 'huggingface-hub==0.36.2', 'hf-xet==1.2.0', 'numpy==1.26.4', 'librosa==0.11.0', '--cache-dir', $cacheDir)
 $models = Join-Path $Root 'models'
-Invoke-Checked $python @((Join-Path $PSScriptRoot 'download_qwen_models.py'), $models, '--source', $ModelSource)
+Invoke-Checked $python @((Join-Path $PSScriptRoot 'maintenance/download_qwen_models.py'), $models, '--source', $ModelSource)
 Invoke-Checked $python @('-c', 'import torch,qwen_asr; assert torch.cuda.is_available(); print(torch.__version__, torch.cuda.get_device_name())')
 if ($ConfigureLocal) {
     $localFile = Join-Path $configRoot 'local.conf'

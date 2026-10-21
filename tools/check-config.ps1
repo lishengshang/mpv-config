@@ -2,7 +2,7 @@
 param([string]$ConfigRoot = '', [switch]$Json, [switch]$Mpv, [string]$MpvRoot = '')
 $ErrorActionPreference = 'Stop'
 if (!$ConfigRoot) { $ConfigRoot = Split-Path $PSScriptRoot -Parent }
-$taskArgs = @((Join-Path $PSScriptRoot 'check_config.py'), '--config-root', $ConfigRoot)
+$taskArgs = @((Join-Path $PSScriptRoot 'maintenance/check_config.py'), '--config-root', $ConfigRoot)
 if ($Json) { $taskArgs += '--json' }
 if ($Mpv) { $taskArgs += '--mpv' }
 if ($MpvRoot) { $taskArgs += @('--mpv-root', $MpvRoot) }

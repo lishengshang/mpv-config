@@ -14,7 +14,7 @@ import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-CONFIG = Path(__file__).resolve().parents[1]
+CONFIG = Path(__file__).resolve().parents[2]
 ASSET = re.compile(r'~~/[^\s;"\x27`\\]+\.(?:vpy|glsl|hook|icc)\b')
 BUILTIN_SCRIPTS = {'select', 'stats', 'console', 'osc', 'ytdl_hook', 'commands', 'context_menu', 'positioning'}
 COMMAND_FLAGS = {'no-osd', 'osd-msg', 'osd-msg-bar', 'osd-bar', 'osd-auto', 'raw',

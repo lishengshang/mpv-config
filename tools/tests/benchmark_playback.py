@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import subprocess
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def main():
@@ -32,7 +32,7 @@ def main():
     source = str(args.media.resolve()) if args.media else f'av://lavfi:testsrc2=size={args.height * 16 // 9}x{args.height}:rate=30,format=yuv420p'
     command = [str(ROOT.parent / 'mpv.exe'), *(['--no-config'] if args.minimal else []), '--config-dir=' + str(ROOT),
                '--load-scripts=no', '--script=' + str(ROOT / 'scripts/gpu-effects.lua'),
-               '--script=' + str(ROOT / 'scripts/player-health.lua'), '--script=' + str(ROOT / 'tools/benchmark_playback.lua'),
+               '--script=' + str(ROOT / 'scripts/player-health.lua'), '--script=' + str(ROOT / 'tools/tests/benchmark_playback.lua'),
                '--vo=gpu-next', '--gpu-api=d3d11', '--ao=null', '--osc=no', '--idle=yes', '--keep-open=yes',
                '--pause=no', '--speed=1', '--resume-playback=no', '--save-position-on-quit=no', '--input-ipc-server=',
                '--geometry=1280x720', '--autofit=', '--autofit-larger=', '--autofit-smaller=', '--loop-file=no',

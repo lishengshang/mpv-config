@@ -12,7 +12,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-CONFIG = Path(__file__).resolve().parents[1]
+CONFIG = Path(__file__).resolve().parents[2]
 ERRORS = re.compile(
     r'Python exception|Traceback|could not init VS|Disabling filter|'
     r'Failed to (?:initialize|load|compile)|Error (?:compiling|parsing)|'

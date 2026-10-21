@@ -8,7 +8,7 @@ work=$(cd "$work" && pwd)
 test "$MSYSTEM" = UCRT64
 python - "$plan" <<'PY'
 import sys
-sys.path.insert(0, 'tools')
+sys.path.insert(0, 'tools/release')
 from release import load_plan
 load_plan(sys.argv[1])
 PY
@@ -34,7 +34,7 @@ checkout_source lunarmodules/luasocket "$(read_build_field luasocket_commit)" "$
 python - "$plan" "$work/backports.txt" <<'PY'
 from pathlib import Path
 import sys
-sys.path.insert(0, 'tools')
+sys.path.insert(0, 'tools/release')
 from release import load_plan, selected_backports
 Path(sys.argv[2]).write_text(''.join(commit + '\n' for commit in selected_backports(load_plan(sys.argv[1]))),
                            encoding='utf-8', newline='\n')
@@ -49,7 +49,7 @@ while IFS= read -r backport; do
     python - "$work/$backport.patch" "$backport" "$plan" <<'PY'
 from pathlib import Path
 import sys
-sys.path.insert(0, 'tools')
+sys.path.insert(0, 'tools/release')
 from release import adapt_backport, load_plan
 path = Path(sys.argv[1])
 path.write_text(adapt_backport(path.read_text(encoding='utf-8'), sys.argv[2], load_plan(sys.argv[3])['mpv_tag']),
@@ -63,7 +63,7 @@ done < "$work/backports.txt"
 python - "$plan" "$work/local-patches.txt" <<'PY'
 from pathlib import Path
 import sys
-sys.path.insert(0, 'tools')
+sys.path.insert(0, 'tools/release')
 from release import load_plan, selected_local_patches
 Path(sys.argv[2]).write_text(''.join(path + '\n' for path in selected_local_patches(load_plan(sys.argv[1]))),
                            encoding='utf-8', newline='\n')

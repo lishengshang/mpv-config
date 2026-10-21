@@ -1,5 +1,5 @@
 -- Dependency-free controller regression, hosted by mpv's Lua runtime.
--- Run: mpv --no-config --load-scripts=no --script=tools/test_gpu_effects.lua --idle=yes
+-- Run: mpv --no-config --load-scripts=no --script=tools/tests/test_gpu_effects.lua --idle=yes
 local host, json = mp, require 'mp.utils'
 local function copy(value) return json.parse_json(json.format_json(value)) end
 local state, handlers, hooks, jobs, timers, observations, missing, commands

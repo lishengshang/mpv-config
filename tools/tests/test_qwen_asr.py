@@ -4,6 +4,10 @@ import ctypes
 from ctypes import wintypes  # Load before tests temporarily replace sys.path.
 import unittest
 from unittest.mock import patch
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'runtime'))
 from qwen_subtitles import chunks, language_name, stamp, timed_cues
 import qwen_runtime
 

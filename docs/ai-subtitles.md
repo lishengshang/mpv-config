@@ -44,7 +44,7 @@ script-message-to sub_fastwhisper sub-fastwhisper-translation-cancel
 
 已有可信组件包时，可用 `tools/components.cmd` 一并安装 Whisper、Qwen 与媒体工具，并修复迁移路径，见[组件安装与迁移](config-checks.md#组件安装与迁移)。安装器将 Whisper 本地模型目录写入 `sub_fastwhisper-whisper_model_dir`；留空时沿用后端原有查找规则。Qwen 在中文路径下借助 Windows 短路径兼容 DyNet；禁用短文件名的目标卷请使用英文运行时目录。下面的源环境部署仍可单独使用。
 
-适配器为 `tools/qwen_subtitles.py`，使用 Python 3.12.12、PyTorch 2.8.0+cu128、官方 `qwen-asr==0.0.6` 的 Transformers 后端，CUDA / bfloat16 / SDPA / batch=1。默认每段不超过 20 秒，优先在静音处切分；`qwen_chunk_seconds` 可设为 2–30。先完成识别并释放模型，再加载官方 ForcedAligner 0.6B 校时，避免两模型同时占显存。按对齐时间和标点断句，保留识别标点；它生成原语言字幕，翻译仍沿用现有可选 API。
+适配器为 `tools/runtime/qwen_subtitles.py`，使用 Python 3.12.12、PyTorch 2.8.0+cu128、官方 `qwen-asr==0.0.6` 的 Transformers 后端，CUDA / bfloat16 / SDPA / batch=1。默认每段不超过 20 秒，优先在静音处切分；`qwen_chunk_seconds` 可设为 2–30。先完成识别并释放模型，再加载官方 ForcedAligner 0.6B 校时，避免两模型同时占显存。按对齐时间和标点断句，保留识别标点；它生成原语言字幕，翻译仍沿用现有可选 API。
 
 目前 Qwen 接入只支持本地媒体的内置音轨，按 mpv 当前音轨抽取音频；网络媒体和外挂音轨请切回 Whisper。Qwen 自行分片，不使用 Whisper 的 `use_segment` / `segment_duration` / `compute_type` / `model` 选项。生成期间播放其他 GPU 增强会争用显存；显存不足时本次任务失败，不自动换模型或后端。
 
@@ -67,15 +67,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/setup-qwen-asr.ps1 -Co
 验收命令：
 
 ```powershell
-python tools/test_qwen_asr.py
-python tools/test_ai_subtitles_mock.py
-python tools/test_ai_subtitles.py --full-config
-python tools/test_ai_subtitles.py --full-config --engine qwen --menu-switch
-python tools/test_ai_subtitles.py --full-config --management
-python tools/test_ai_subtitles.py --full-config --segment --render
-python tools/test_ai_subtitles.py --full-config --segment --fixed-segments --render
-python tools/test_ai_subtitles.py --full-config --long-speech --render
-python tools/test_ai_subtitles.py --full-config --segment --render --media "<本机视频路径>" --language zh --timeout 2400
+python tools/tests/test_qwen_asr.py
+python tools/tests/test_ai_subtitles_mock.py
+python tools/tests/test_ai_subtitles.py --full-config
+python tools/tests/test_ai_subtitles.py --full-config --engine qwen --menu-switch
+python tools/tests/test_ai_subtitles.py --full-config --management
+python tools/tests/test_ai_subtitles.py --full-config --segment --render
+python tools/tests/test_ai_subtitles.py --full-config --segment --fixed-segments --render
+python tools/tests/test_ai_subtitles.py --full-config --long-speech --render
+python tools/tests/test_ai_subtitles.py --full-config --segment --render --media "<本机视频路径>" --language zh --timeout 2400
 ```
 
 测试使用 320×180/24fps H.264 + AAC 英语合成语音，检查有效 SRT、完成标记、目录同名媒体隔离、重复打开与按键复用、下一文件、字幕状态重置及媒体目录无新增字幕；Qwen 菜单测试加载真实 uosc，经导航键/回车切换，结束恢复 Whisper。`--management` 还通过真实菜单触发第三次生成，并导出至明确指定的测试目录。Lua 模拟断言另覆盖失败/空输出、缓存损坏、取消与旧回调、重新生成失败保留旧缓存/成功移除旧译文、后端隔离、外部字幕保留，以及分段 PCM 提取、音轨映射、小数秒偏移、边界截断、纯数字字幕和静音段；9 项 Python 检查覆盖语言映射、切片、标点、断句和时间格式。
@@ -138,13 +138,13 @@ python tools/test_ai_subtitles.py --full-config --segment --render --media "<本
 复现入口（会产生少量真实 API 调用，默认仅发送三条固定测试字幕；密钥仅从忽略的 `local.conf` 读取）：
 
 ```powershell
-python tools/test_subtitle_translation.py --media '<本地测试视频>'
+python tools/tests/test_subtitle_translation.py --media '<本地测试视频>'
 # 发送明确指定的 SRT，可用 --target English 测中译英；不自动上传视频转录内容
-python tools/test_subtitle_translation.py --media '<缓存课程切片>' --subtitles '<待翻译 SRT>' --target English
+python tools/tests/test_subtitle_translation.py --media '<缓存课程切片>' --subtitles '<待翻译 SRT>' --target English
 # 同样参数加 --reuse '<上一轮 cache/translation-* 目录>'，要求重开播放器后零请求复用
 # --offline 使用本地 HTTP 固定响应，只检查显示与请求链路，不证明真实 API 可用
-python tools/test_subtitle_translation.py --offline --offline-failures 1 --offline-budget --media '<本地测试视频>'
-..\mpv.com --no-config --load-scripts=no --script=tools/test_translation_job.lua --idle=yes --vo=null --ao=null
+python tools/tests/test_subtitle_translation.py --offline --offline-failures 1 --offline-budget --media '<本地测试视频>'
+..\mpv.com --no-config --load-scripts=no --script=tools/tests/test_translation_job.lua --idle=yes --vo=null --ao=null
 ```
 
 工具不启用 mpv 的详细文件日志，控制台输出在保存前替换密钥；原始详细日志可能包含选项或 subprocess 参数，不用于真实密钥测试。

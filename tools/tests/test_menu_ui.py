@@ -9,7 +9,7 @@ import subprocess
 import sys
 from datetime import datetime
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def main():
@@ -39,9 +39,9 @@ def main():
                         '-preset', 'ultrafast', '-c:a', 'aac', str(media)], check=True, timeout=60)
         source = str(media)
     scripts = ['scripts/uosc', 'scripts/menu-ui.lua', 'scripts/dyn_menu.lua', 'scripts/inputevent.lua',
-               'scripts/gpu-effects.lua', 'scripts/quality-menu.lua', 'tools/test_menu_ui_playback.lua']
+               'scripts/gpu-effects.lua', 'scripts/quality-menu.lua', 'tools/tests/test_menu_ui_playback.lua']
     if options.full:
-        scripts = ['tools/test_menu_ui_playback.lua']
+        scripts = ['tools/tests/test_menu_ui_playback.lua']
     opts = [f'menu-test-output={folder.as_posix()}', f'simplehistory-log_path={folder.as_posix()}',
             f'simplebookmark-log_path={folder.as_posix()}', 'uosc_danmaku-auto_load=no',
             'uosc_danmaku-autoload_for_url=no', 'uosc_danmaku-autoload_local_danmaku=no']

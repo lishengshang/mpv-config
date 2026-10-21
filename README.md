@@ -8,13 +8,28 @@
 
 **配置下载**：[本仓库](https://github.com/lishengshang/mpv-config)。仓库提供配置、脚本和着色器，不包含 mpv 播放器、外部运行时及 AI 模型。
 
-将配置放入 `mpv.exe` 同级的 `portable_config/` 文件夹，目录应为 `portable_config/mpv.conf`，不要再嵌套一层仓库目录。也可使用 Windows 默认用户配置目录 `%APPDATA%/mpv/`；存在 `portable_config/` 时，mpv 优先使用便携配置目录。
+### 第一次使用
 
-首次使用前备份已有配置；需要机器路径或私人 API key 时，参照 [local.conf.example](local.conf.example) 创建 `local.conf`，该文件已从 Git 排除。轻量 ArtCNN shader 随配置提供；VS 增强和 AI 字幕需另行部署相应依赖。
+1. 备份已有播放器配置，准备支持 `gpu-next` / D3D11 的 Windows 64 位 mpv，保留播放器包内的 DLL 等文件。下载本仓库源码时，还需另备播放器；若使用本项目播放器发行包，按其 Release 说明解压，包内已有配置时跳过重复安装。
+2. 将本仓库内容放入 `mpv.exe` 同级的 `portable_config/`，确认文件是 `portable_config/mpv.conf`，不要多套一层目录。也可放入 `%APPDATA%/mpv/`；存在便携配置时优先使用便携配置。VS 安装与迁移工具按便携目录布局设计，准备使用这些功能时采用前一种布局。
+3. 启动 `mpv.exe`，拖入本地视频，右键打开菜单。先确认播放、声音和已有字幕正常，再按下面的用途添加可选功能。基础播放不要求安装 Python、VS 或 AI 模型。
 
-修改配置后双击 `tools/check-config.cmd`，检查配置引用、等价键位与脚本接线。此工具需要 Python 3.10+，优先使用 mpv 同级的便携 Python；静态检查与原生命令解析通过不等于媒体、GPU 或字幕功能验收通过，详见 [配置检查](docs/config-checks.md)。
+需要填写本机路径或私人 API key 时，参照 [local.conf.example](local.conf.example) 创建自己的 `local.conf`，该文件已从 Git 排除。更新配置前备份本地修改、`local.conf` 及需要保留的字幕缓存，不用别人的私人配置覆盖自己的设置。
 
-正式版跟随与预发布流程见 [发行说明](docs/config-checks.md#正式版跟随与预发布)；当前发行工具仍在验证，仓库下载不等于完整播放器或离线 AI/VS 包。
+### 按需求选择
+
+| 你的需求或环境 | 怎么用 | 继续阅读 |
+| --- | --- | --- |
+| 只想看视频、使用已有字幕 | 完成上面的三步，通过右键菜单选择音轨、字幕和播放设置；不必运行测试或安装 AI/VS | [菜单与快捷键](input.conf) |
+| 核显、AMD 或暂不安装增强组件 | 从基础播放开始；随配置提供的 shader 可按需尝试，RTX VS 方案不作为通用硬件方案 | [GPU 依赖与兼容范围](docs/gpu-setup.md) |
+| NVIDIA RTX，想超分、补帧或降噪 | 从菜单“画质增强 → 画面增强”按需选择；需要 VS 的方案先安装匹配运行时、插件与模型，再做 GPU 自检 | [GPU 快速上手](docs/gpu-setup.md) |
+| 视频没有字幕，想本地生成 | 先部署 Whisper 后端和模型，再按 `Alt+f`；Qwen 是另需部署的可选后端。翻译额外需要自己的接口和 key | [AI 字幕](docs/ai-subtitles.md) |
+| 换电脑、移动播放器或补装组件 | 使用便携目录布局和可信组件清单，通过 `tools/components.cmd` 检查、安装或修复路径 | [组件安装与迁移](docs/config-checks.md#组件安装与迁移) |
+| 想调参、维护或参与开发 | 修改对应配置后运行 `tools/check-config.cmd`；测试在 `tools/tests/`，构建与发布在 `tools/release/` | [工具目录](docs/config-checks.md#工具目录)、[开发约束](AGENTS.md) |
+
+`tools/` 顶层保留 Windows 操作入口，普通用户按需使用即可；子目录包含播放器会调用的辅助程序，请随配置一起保留。配置检查需要 Python 3.10+，优先使用 mpv 同级的便携 Python；检查通过不代表 GPU 或字幕已在你的电脑上验收。
+
+播放器预发布、源码配置和可选组件是不同下载内容。公开组件清单尚未接入发行配置，不能把仓库源码或播放器候选包当作离线 AI/VS 完整版；使用预发布前核对对应说明中的依赖与已测范围。发行流程见 [发行说明](docs/config-checks.md#正式版跟随与预发布)。
 
 PS：自行编辑文本时使用 UTF-8、LF；脚本选项的注释单独占行，避免改变参数值。
 

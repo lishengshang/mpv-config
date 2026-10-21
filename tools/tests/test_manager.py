@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import time
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def main():
@@ -31,7 +31,7 @@ def main():
     command = [str(ROOT.parent / 'mpv.exe'), '--no-config', '--config-dir=' + str(config), '--load-scripts=no',
                '--script=' + str(ROOT / 'scripts/uosc'), '--osc=no', '--geometry=1280x720',
                '--osd-fonts-dir=' + str(ROOT / 'fonts'), '--osd-font=Noto Sans Mono CJK SC',
-               '--script=' + str(ROOT / 'scripts/manager.lua'), '--script=' + str(ROOT / 'tools/test_manager_playback.lua'),
+               '--script=' + str(ROOT / 'scripts/manager.lua'), '--script=' + str(ROOT / 'tools/tests/test_manager_playback.lua'),
                '--input-conf=' + str(ROOT / 'input.conf'), '--script-opts=' + ','.join(opts),
                '--vo=gpu-next', '--gpu-api=d3d11', '--ao=null', '--idle=yes', '--pause=yes', '--input-ipc-server=',
                '--log-file=' + str(folder / 'player.log'), 'av://lavfi:testsrc2=size=160x90:rate=24']

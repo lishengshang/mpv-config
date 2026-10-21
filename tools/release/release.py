@@ -18,7 +18,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 STABLE_TAG = re.compile(r'v(\d+)\.(\d+)\.(\d+)\Z')
 SHA = re.compile(r'[0-9a-f]{40}\Z')
 CONFIG_FILES = {'mpv.conf', 'profiles.conf', 'input.conf', 'inputevent_key.conf',
@@ -315,7 +315,7 @@ def check_release(args):
     try:
         report['version'] = validate_capabilities(runtime, plan['build'], env)
         config = runtime / 'portable_config'
-        run([sys.executable, ROOT / 'tools/check_config.py', '--config-root', config,
+        run([sys.executable, ROOT / 'tools/maintenance/check_config.py', '--config-root', config,
              '--mpv-root', runtime, '--mpv'], env=env, cwd=evidence)
         script = evidence / 'smoke.lua'
         script.write_text('''local loaded = 0

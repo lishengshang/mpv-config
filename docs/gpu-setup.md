@@ -78,22 +78,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/export-vs-addon.ps1
 
 双击 `tools/verify-gpu.cmd` 做运行自检；`-MpvRoot` 可指定另一播放器目录。工具需要 Python，但 shader 播放本身不需要。VS 要求进程成功、日志有效、无已知错误并至少输出三张有效 PNG；shader 使用 gpu-next 2× 窗口截图和 ArtCNN hook 日志。失败、缺输出、超时均返回非零，报告在 `cache/gpu-check/`。耗时含初始化/编译/截图，不能当稳定帧率。
 
-检查隔离播放器配置，功能验收还需菜单/键位、下一文件和恢复默认。控制状态回归用 `tools/test_gpu_effects.lua`，探针用 `tools/test_gpu_probe.py`；播放测试：
+检查隔离播放器配置，功能验收还需菜单/键位、下一文件和恢复默认。控制状态回归用 `tools/tests/test_gpu_effects.lua`，探针用 `tools/tests/test_gpu_probe.py`；播放测试：
 
 ```powershell
-..\mpv.com --no-config --load-scripts=no --script=tools/test_gpu_effects.lua --idle=yes --vo=null --ao=null --osc=no
-..\python.exe tools/test_gpu_probe.py
-..\python.exe tools/test_gpu_ux.py --case playback
-..\python.exe tools/test_gpu_ux.py --case playback --paused
-..\python.exe tools/test_gpu_ux.py --case no-vs
-..\python.exe tools/test_gpu_ux.py --case failure
+..\mpv.com --no-config --load-scripts=no --script=tools/tests/test_gpu_effects.lua --idle=yes --vo=null --ao=null --osc=no
+..\python.exe tools/tests/test_gpu_probe.py
+..\python.exe tools/tests/test_gpu_ux.py --case playback
+..\python.exe tools/tests/test_gpu_ux.py --case playback --paused
+..\python.exe tools/tests/test_gpu_ux.py --case no-vs
+..\python.exe tools/tests/test_gpu_ux.py --case failure
 # 使用独立空缓存验证首次 shader 编译；保留日常缓存
-python tools/test_gpu_ux.py --case playback --paused --source-width 640 --cold-shader-cache --timeout 1800
+python tools/tests/test_gpu_ux.py --case playback --paused --source-width 640 --cold-shader-cache --timeout 1800
 # 复用上一轮报告中的缓存验证普通播放（替换为实际报告目录）
-python tools/test_gpu_ux.py --case playback --source-width 640 --shader-cache-dir 'cache/gpu-ux/<上一轮报告目录>/shader-cache'
+python tools/tests/test_gpu_ux.py --case playback --source-width 640 --shader-cache-dir 'cache/gpu-ux/<上一轮报告目录>/shader-cache'
 ```
 
-播放测试只加载 uosc、GPU 脚本和输入绑定，日志/截图在 `cache/gpu-ux/`；默认 1280×720/30fps，不覆盖全部日常脚本。小尺寸暂停切换回归：`python tools/test_gpu_ux.py --case playback --paused --source-width 640 --focused`；覆盖 RIFE、DRBA、两种 ArtCNN、MIX、用户滤镜保留与下一文件，不等待 shader 编译。去掉 `--paused` 比较普通播放。全序列中的暂停测试还覆盖 MIX 激活后的 seek，并核对每次截图时仍处于暂停状态。
+播放测试只加载 uosc、GPU 脚本和输入绑定，日志/截图在 `cache/gpu-ux/`；默认 1280×720/30fps，不覆盖全部日常脚本。小尺寸暂停切换回归：`python tools/tests/test_gpu_ux.py --case playback --paused --source-width 640 --focused`；覆盖 RIFE、DRBA、两种 ArtCNN、MIX、用户滤镜保留与下一文件，不等待 shader 编译。去掉 `--paused` 比较普通播放。全序列中的暂停测试还覆盖 MIX 激活后的 seek，并核对每次截图时仍处于暂停状态。
 
 测试不以 PNG 文件存在代替有效画面：解码 RGB/RGBA 8/16 位 PNG 的前 32 行，检查合成测试图应有的彩色像素，拒绝 VS 初始化占位黑帧；该规则只用于此处无黑边的 `testsrc2`，不用于判断真实影片的黑场。首次 shader 编译可能远超普通切换耗时，可用 `--timeout` 增加原生进程的总时限；VS 单项初始化时限仍由 GPU 脚本独立管理。`--cold-shader-cache` 仅让 mpv shader 缓存为空，不清除驱动或 TRT 引擎缓存；`--shader-cache-dir` 用于显式复用缓存，二者互斥。
 

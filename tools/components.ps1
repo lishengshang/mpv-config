@@ -82,7 +82,7 @@ try {
         } finally { $archive.Dispose() }
         $python = Join-Path $bootstrapRuntime 'python.exe'
     }
-    $taskArguments = @((Join-Path $PSScriptRoot 'components.py'), $Action.ToLowerInvariant(), '--mpv-root', $rootPath)
+    $taskArguments = @((Join-Path $PSScriptRoot 'maintenance/components.py'), $Action.ToLowerInvariant(), '--mpv-root', $rootPath)
     if ($Action -eq 'Install') { $taskArguments += @('--catalog', $Catalog) }
     if ($Action -ne 'Configure') { $taskArguments += @('--components') + $Components }
     & $python @taskArguments
