@@ -200,9 +200,17 @@ mp.add_periodic_timer(0.15, function()
             local status = mp.get_property_native('user-data/ai-subtitles/status', {})
             check(status.cached and not status.running, 'management status reflects current completed cache')
             mp.commandv('screenshot-to-file', o.root .. '/management.png', 'window')
-            mp.commandv('keypress', 'HOME')
+            mp.commandv('keypress', 'END')
             phase, previous = 71, mp.get_time()
         elseif phase == 71 and mp.get_time() - previous > 0.2 then
+            mp.commandv('keypress', 'ENTER'); phase, previous = 711, mp.get_time()
+        elseif phase == 711 and mp.get_property_native('user-data/uosc/menu/type') == 'ai-subtitle-settings' and mp.get_time() - previous > 0.3 then
+            mp.commandv('keypress', 'HOME'); phase, previous = 712, mp.get_time()
+        elseif phase == 712 and mp.get_time() - previous > 0.2 then
+            mp.commandv('keypress', 'DOWN'); phase, previous = 713, mp.get_time()
+        elseif phase == 713 and mp.get_time() - previous > 0.2 then
+            mp.commandv('keypress', 'DOWN'); phase, previous = 714, mp.get_time()
+        elseif phase == 714 and mp.get_time() - previous > 0.2 then
             mp.commandv('keypress', 'DOWN'); phase, previous = 72, mp.get_time()
         elseif phase == 72 and mp.get_time() - previous > 0.2 then
             mp.commandv('keypress', 'ENTER'); phase = 73

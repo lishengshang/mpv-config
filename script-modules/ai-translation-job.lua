@@ -9,9 +9,10 @@ function M.new(options)
     local job = {state = 'idle', completed = {}, requests = 0, input_chars = 0, tokens = 0,
         done = 0, total = #options.cues, message = '', attempts = 0, last_request = -math.huge}
     local batch, timer, abort, active = nil, nil, nil, false
-    local request_limit, char_limit = options.max_requests or 20, options.max_chars or 20000
+    local request_limit, char_limit = options.max_requests or 20, options.max_chars or 0
     local request_allowance, char_allowance = request_limit, char_limit
     local cancelled = false
+    local request_serial = 0
     local wall_now = options.wall_now or options.now
     local last_wall, cooldown = 0, 0
     local function save()
@@ -20,9 +21,11 @@ function M.new(options)
             last_request_wall = last_wall, not_before_wall = wall_now() + math.max(0, cooldown - options.now())})
     end
     function job.snapshot()
-        return {state = job.state, done = job.done, total = job.total, requests = job.requests,
+        local status = {state = job.state, done = job.done, total = job.total, requests = job.requests,
             input_chars = job.input_chars, tokens = job.tokens, message = job.message,
             request_limit = request_allowance, char_limit = char_allowance}
+        if options.describe then options.describe(status, job.completed, batch) end
+        return status
     end
     local function publish(state, message)
         job.state, job.message = state, message or ''
@@ -45,11 +48,16 @@ function M.new(options)
     local dispatch
     local function later(delay, state, message)
         cooldown = options.now() + delay
-        save()
+        if not save() then publish('failed', '无法保存等待进度，已停止请求'); return end
         publish(state, message)
-        timer = options.schedule(delay, function() timer = nil; dispatch() end)
+        local serial = request_serial
+        timer = options.schedule(delay, function()
+            if cancelled or serial ~= request_serial then return end
+            timer = nil; dispatch()
+        end)
     end
     local function next_batch()
+        if options.next_batch then return options.next_batch(job.completed) end
         local cues, lines = {}, {}
         for _, cue in ipairs(options.cues) do
             if not job.completed[cue.key] then
@@ -61,6 +69,7 @@ function M.new(options)
         return {cues = cues, text = table.concat(lines, '\n')}
     end
     local function decode(text)
+        if options.decode then return options.decode(text, batch) end
         if type(text) ~= 'string' then return nil end
         local lines = {}
         for line in text:gmatch('[^\r\n]+') do if line:match('%S') then lines[#lines + 1] = line end end
@@ -84,7 +93,7 @@ function M.new(options)
         local count = characters(batch.text)
         if (request_limit > 0 and job.requests >= request_allowance) or
             (char_limit > 0 and job.input_chars + count > char_allowance) then
-            save(); publish('budget', '已到费用控制上限，手动继续可追加一档预算'); return
+            save(); publish('budget', '已到本次请求或输入上限，手动继续可追加额度'); return
         end
         local delay = math.max(job.last_request + 60 / math.max(1, options.rate or 15), cooldown) - options.now()
         if delay > 0.001 then later(delay, 'waiting', '等待请求速率窗口'); return end
@@ -94,9 +103,12 @@ function M.new(options)
         if not save() then
             active = false; publish('failed', '无法保存请求预算，已停止发送'); return
         end
-        publish('running', '正在翻译')
-        abort = options.send(batch.text, function(response)
-            if cancelled then return end
+        publish('running', batch.stage == 'calibration' and '正在全文校准' or '正在翻译')
+        request_serial = request_serial + 1
+        local serial, finished = request_serial, false
+        local request_abort = options.send(batch.text, function(response)
+            if cancelled or serial ~= request_serial then return end
+            finished, request_serial = true, request_serial + 1
             active, abort = false, nil
             response = response or {}
             job.tokens = job.tokens + math.max(0, tonumber(response.tokens) or 0)
@@ -116,7 +128,8 @@ function M.new(options)
                 local backoff = math.max((options.retry_base or 2) * 2 ^ (job.attempts - 1), tonumber(response.retry_after) or 0)
                 later(backoff, 'retrying', '接口暂不可用，等待后重试（计入预算）')
             else publish('failed', '翻译失败：' .. tostring(response.error or ('HTTP ' .. status .. ' / 响应格式不符'))) end
-        end)
+        end, batch)
+        if not finished and serial == request_serial then abort = request_abort end
     end
     function job.start()
         if active or timer then return end
@@ -135,6 +148,7 @@ function M.new(options)
     end
     function job.cancel()
         cancelled = true
+        request_serial = request_serial + 1
         if timer then timer:kill(); timer = nil end
         if abort then abort(); abort = nil end
         active = false

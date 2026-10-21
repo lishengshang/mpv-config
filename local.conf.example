@@ -21,7 +21,8 @@
 #script-opts-append=sub_fastwhisper-whisper_model_dir=C:/path/to/whisper/_models
 
 # 可选字幕翻译：兼容 Chat Completions 的接口，curl 需支持 --fail-with-body。
-# 配置 key 后，AI 识别完成会继续翻译；不配置时仅生成原文字幕。
+# 配置 key 后，仅日语及其他非中文/英语的明确语种自动全文校准再翻译；中文/英语需手动触发。
+# 不配置 key 时仅生成原文字幕；自动规则可在 script-opts/sub_fastwhisper.conf 中关闭。
 #script-opts-append=sub_fastwhisper-api_url=https://your-provider.example/v1/chat/completions
 #script-opts-append=sub_fastwhisper-api_mode=your-model
 #script-opts-append=sub_fastwhisper-api_key=your-private-key

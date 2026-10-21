@@ -1,17 +1,19 @@
 -- Real API integration. Credentials come from ignored local.conf, never test arguments.
 local utils = require 'mp.utils'
-local o = {root = '', timeout = 120, target = 'Chinese', custom = false, resume_budget = false}
+local o = {root = '', timeout = 120, target = 'Chinese', custom = false, resume_budget = false, feedback_delay = false}
 require('mp.options').read_options(o, 'translation-test')
 package.path = mp.command_native({'expand-path', '~~/script-modules/?.lua'}) .. ';' .. package.path
 local cache = require 'ai-subtitle-cache'
 local original = table.concat({
-    '1\n00:00:00,000 --> 00:00:02,000\nPlease close the window before the rain starts.\n\n',
+    '1\n00:00:00,000 --> 00:00:02,000\nPlease close the windwo before the rain starts.\n\n',
     '2\n00:00:02,000 --> 00:00:04,000\nThe train will arrive at half past seven tomorrow morning.\n\n',
     '3\n00:00:04,000 --> 00:00:06,000\nAll generated subtitles must stay in the cache folder.\n\n'})
 local source = utils.join_path(o.root, 'original.srt')
 local phase, translated, content, expected_text, began = 0, nil, nil, nil, mp.get_time()
 local selections = {}
 local budget_at, budget_resumed
+local resumed_requests
+local feedback_verified, feedback_started
 local budget_stage = 0
 local original_font, original_scale = mp.get_property_number('sub-font-size'), mp.get_property_number('sub-scale')
 local function translated_text(text)
@@ -35,6 +37,21 @@ mp.add_periodic_timer(0.2, function()
         check(mp.get_time() - began < o.timeout, 'translation timed out')
         if phase == 1 then
             local status = mp.get_property_native('user-data/ai-subtitles/status/translation', {})
+            local feedback = mp.get_property_native('user-data/ai-subtitles/feedback', {})
+            if o.feedback_delay and not feedback_started and feedback.phase == 'calibration' and (feedback.elapsed or 0) >= 10 then
+                check(feedback.active and feedback.text:find('全文校准') and not feedback.text:find('0/3'), 'persistent calibrated feedback without false progress')
+                feedback_started = true
+                mp.commandv('screenshot-to-file', utils.join_path(o.root, 'working.png'), 'window')
+                mp.commandv('script-message-to', 'sub_fastwhisper', 'sub-fastwhisper-manager')
+                mp.add_timeout(0.4, function()
+                    local menu = mp.get_property_native('user-data/ai-subtitles/menu', {})
+                    local ok = #menu.items == 4 and menu.items[2].title == '取消任务'
+                    if not ok then mp.msg.error('TRANSLATION PLAYBACK FAIL: busy menu'); mp.commandv('quit', '3'); return end
+                    mp.commandv('screenshot-to-file', utils.join_path(o.root, 'busy-menu.png'), 'window')
+                    feedback_verified = true
+                    mp.commandv('script-message-to', 'uosc', 'close-menu', 'ai-subtitle-manager')
+                end)
+            end
             if status.state == 'budget' and o.resume_budget and not budget_resumed then
                 if budget_stage == 0 then
                     budget_at, budget_stage = mp.get_time(), 1
@@ -44,14 +61,18 @@ mp.add_periodic_timer(0.2, function()
                         check(mp.get_time() - budget_at < 5, 'budget menu visible'); return
                     end
                     mp.commandv('screenshot-to-file', utils.join_path(o.root, 'budget-menu.png'), 'window')
-                    mp.commandv('keypress', 'END'); budget_stage, budget_at = 2, mp.get_time()
+                    mp.commandv('keypress', 'HOME'); budget_stage, budget_at = 2, mp.get_time()
                 elseif budget_stage == 2 and mp.get_time() - budget_at > 0.3 then
-                    mp.commandv('keypress', 'UP'); budget_stage, budget_at = 3, mp.get_time()
+                    budget_stage, budget_at = 3, mp.get_time()
                 elseif budget_stage == 3 and mp.get_time() - budget_at > 0.3 then
                     budget_resumed = true
+                    resumed_requests = status.requests
                     mp.commandv('keypress', 'ENTER')
                     mp.add_timeout(0.3, function() mp.commandv('script-message-to', 'uosc', 'close-menu', 'ai-subtitle-manager') end)
                 end
+            elseif status.state == 'budget' and o.resume_budget and budget_resumed and resumed_requests ~= status.requests then
+                resumed_requests = status.requests
+                mp.commandv('script-message-to', 'sub_fastwhisper', 'sub-fastwhisper-translate-resume')
             end
             for _, track in ipairs(mp.get_property_native('track-list', {})) do
                 local path = track['external-filename']
@@ -72,6 +93,11 @@ mp.add_periodic_timer(0.2, function()
             check(translated_text(content), 'target-language output')
             check(content ~= original, 'response is not unchanged source text')
             check(cache.read(source) == original, 'original subtitle unchanged')
+            local calibrated = cache.read(translated:gsub('subtitles%.translate%.srt$', 'subtitles.calibrated.srt'))
+            check(cache.valid_srt(calibrated), 'separate calibrated SRT exists')
+            if not o.custom then
+                check(calibrated:find('window', 1, true) and not calibrated:find('windwo', 1, true), 'clear recognition typo corrected before translation')
+            end
             check(not cache.read(source:gsub('%.srt$', '.translate.srt')), 'no source-adjacent translation')
             phase, began = 2, mp.get_time()
             send() -- Repeated action must not append duplicate cues or issue another request.
@@ -94,6 +120,7 @@ mp.add_periodic_timer(0.2, function()
             check(cache.write(utils.join_path(o.root, 'result.json'), utils.format_json({
                 passed = true, source = source, translated = translated, visible = visible,
                 budget_resumed = budget_resumed,
+                feedback_verified = feedback_verified,
                 translation = mp.get_property_native('user-data/ai-subtitles/status/translation')}) .. '\n'), 'write result')
             phase = 3
             mp.msg.info('TRANSLATION PLAYBACK PASS: target language, timeline, checksum, repeat and unchanged source')

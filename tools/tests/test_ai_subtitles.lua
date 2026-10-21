@@ -23,7 +23,8 @@ local function boot(media, overrides)
     function fake.get_property(key, default)
         if key == 'filename/no-ext' then local _, name = utils.split_path(state.path); return name:gsub('%.%w+$', '') end
         if key == 'working-directory' then return opts.root end
-        return state[key] or default
+        if state[key] == nil then return default end
+        return state[key]
     end
     fake.get_property_number = fake.get_property
     function fake.get_time() return clock end
@@ -32,7 +33,8 @@ local function boot(media, overrides)
         if key == 'pid' then return host.get_property_native('pid') end
         if key == 'command-list' then return {{name = 'normalize-path'}} end
         if key == 'current-tracks/sub' then return state.sub end
-        return state[key] or default
+        if state[key] == nil then return default end
+        return state[key]
     end
     function fake.command_native(spec)
         if spec.name == 'subprocess' then
@@ -46,13 +48,24 @@ local function boot(media, overrides)
         return host.command_native(spec)
     end
     function fake.command_native_async(spec, callback)
+        if spec[1] == 'sub-add' or spec[1] == 'sub-reload' then
+            if settings.defer_subtitle_load then
+                state.subtitle_jobs = state.subtitle_jobs or {}
+                state.subtitle_jobs[#state.subtitle_jobs + 1] = {spec = spec, callback = callback}
+                return 0
+            end
+            fake.commandv(spec[1], spec[2], spec[3])
+            callback(true)
+            return 0
+        end
         jobs[#jobs + 1] = {spec = spec, callback = callback}
         return #jobs
     end
     function fake.abort_async_command(id) aborted[id] = true end
     function fake.commandv(name, a, b, c)
         commands[#commands + 1] = {name, a, b, c}
-        if name == 'sub-add' then
+        if name == 'set' and a == 'sid' then state.sid = b
+        elseif name == 'sub-add' then
             local id = #state['track-list'] + 1
             state['track-list'][id] = {id = id, type = 'sub', ['external-filename'] = a}
         elseif name == 'sub-remove' then
@@ -68,6 +81,12 @@ local function boot(media, overrides)
     end
     function fake.osd_message(message) state.osd = message end
     function fake.get_osd_size() return 640, 360, 1 end
+    function fake.create_osd_overlay()
+        local overlay = {}
+        function overlay:update() state.overlay = self.data end
+        function overlay:remove() state.overlay = '' end
+        return overlay
+    end
     function fake.set_osd_ass() end
     function fake.register_script_message(name, handler) handlers[name] = handler end
     function fake.register_event(name, handler) events[name] = handler end
@@ -89,6 +108,15 @@ local function advance()
     for _, timer in ipairs(pending) do
         if not timer.killed then clock = clock + timer.delay; timer.callback() end
     end
+end
+local function calibrate()
+    local job = jobs[#jobs]
+    local body
+    for i, arg in ipairs(job.spec.args) do if arg == '--data-binary' then body = job.spec.args[i + 1]:sub(2) end end
+    local payload = assert(utils.parse_json(cache.read(body)))
+    check(payload.messages[1].content:find('COMPLETE', 1, true), 'calibration receives complete original before translation')
+    job.callback(true, {status = 0, stdout = utils.format_json({choices = {{message = {content = payload.messages[2].content}}}})})
+    advance()
 end
 local function translation_track(command)
     if command[1] ~= 'sub-add' then return nil end
@@ -125,7 +153,7 @@ local function suite()
         'recognition output in cache: jobs=' .. #jobs .. ', OSD=' .. tostring(state.osd) ..
         ', output=' .. tostring(jobs[1] and output(jobs[1])))
     complete(good)
-    check(#state['track-list'] == 1 and state.osd:find('缓存'), 'zero exit and SRT loads completed cache')
+    check(#state['track-list'] == 1 and state.osd:find('原文字幕'), 'zero exit and SRT loads completed cache')
     local completed = state['track-list'][1]['external-filename']:gsub('%.ai%.ass$', '.srt')
     check(not utils.file_info(path('A/clip.srt')), 'no sidecar created')
     hooks.on_unload()
@@ -149,7 +177,7 @@ local function suite()
     handlers['sub-fastwhisper']()
     check(#jobs == 1, 'different model misses cache')
     complete(good, 7)
-    check(#state['track-list'] == 0 and state.osd:find('failed'), 'nonzero exit rejects even valid output')
+    check(#state['track-list'] == 0 and state.osd:find('失败'), 'nonzero exit rejects even valid output')
     hooks.on_unload()
     boot(a, {model = 'large-v3'})
     events['file-loaded']()
@@ -167,6 +195,7 @@ local function suite()
     handlers['sub-fastwhisper-cancel']()
     pending(true, {status = 0})
     check(aborted[1] and #state['track-list'] == 0, 'manual cancellation ignores late success')
+    check(not state['user-data/ai-subtitles/feedback'].active and state.overlay == '', 'cancel clears persistent feedback and own overlay')
     check(cache.read(completed) == good, 'cancellation keeps other completed cache')
     for _, override in ipairs({{language = 'ja'}, {compute_type = 'int8_float16'}}) do
         boot(a, override)
@@ -211,7 +240,7 @@ local function suite()
     check(#jobs == 1, 'switch back to Qwen reuses its cache')
     handlers['sub-fastwhisper-backend-menu']()
     local menu = utils.parse_json(commands[#commands][4])
-    check(menu.items[2].active and menu.items[1].value[2] == 'sub_fastwhisper', 'menu selection and receiver agree')
+    check(menu.items[3].active and menu.items[1].value[2] == 'sub_fastwhisper', 'menu selection and receiver agree')
     boot(b, qwen_opts)
     handlers['sub-fastwhisper-backend']('qwen')
     handlers['sub-fastwhisper']()
@@ -233,7 +262,8 @@ local function suite()
     state.sub = {external = true, ['external-filename'] = external}
     handlers['sub-translate']()
     check(#jobs == 1 and jobs[1].spec.args[1] == 'curl', 'translation uses mocked API only')
-    jobs[1].callback(true, {status = 0, stdout = utils.format_json({choices = {{message = {
+    calibrate()
+    jobs[2].callback(true, {status = 0, stdout = utils.format_json({choices = {{message = {
         content = '00:00:00,000 --> 00:00:02,000 | Translation in cache.'}}}})})
     check(cache.read(external) == good and not cache.read(external:gsub('%.srt$', '.translate.srt')),
         'manual translation never writes next to selected source subtitle')
@@ -248,6 +278,16 @@ local function suite()
         cache.valid_srt(cache.read(translated)), 'translated SRT is in cache')
     check(cache.read(translated .. '.complete') == cache.digest(cache.read(translated)),
         'translation completion checksum recorded')
+    local requests_before_reload = #jobs
+    handlers['sub-fastwhisper-load-original']()
+    handlers['sub-fastwhisper-load-bilingual']()
+    check(#jobs == requests_before_reload and state.osd:find('未调用 API'), 'explicit raw/bilingual load never starts another API request')
+    for _, item in ipairs({{'original','subtitles.srt'}, {'calibrated','subtitles.calibrated.srt'}, {'translated','subtitles.translate.srt'}}) do
+        handlers['sub-fastwhisper-export'](path('export-' .. item[1] .. '.srt'), item[1])
+        local args, source = jobs[#jobs].spec.args
+        for i, arg in ipairs(args) do if arg == '-Source' then source = args[i + 1] end end
+        check(source and source:sub(-#item[2]) == item[2] and cache.valid_srt(cache.read(source)), 'export selects complete artifact: ' .. item[1])
+    end
     hooks.on_unload()
     boot(a, {api_key = 'mock-only', api_mode = 'translation-failure-regression'})
     state.sub = {external = true, ['external-filename'] = external}
@@ -264,6 +304,9 @@ local function suite()
     check(#jobs == 2, 'explicit translation retries failed API request')
     jobs[2].callback(true, {status = 0, stdout = utils.format_json({choices = {{message = {
         content = '00:00:00,000 --> 00:00:02,000 | Retried translation.'}}}})})
+    advance()
+    jobs[3].callback(true, {status = 0, stdout = utils.format_json({choices = {{message = {
+        content = '00:00:00,000 --> 00:00:02,000 | Retried translation.'}}}})})
     local retried
     for _, command in ipairs(commands) do
         if translation_track(command) then retried = translation_track(command) end
@@ -273,7 +316,8 @@ local function suite()
     for index, response in ipairs({{choices = {{}}}, {choices = {{message = {content = {}}}}},
         {choices = {{message = {content = ''}}}},
         {choices = {{message = {content = '00:00:00,000 --> 00:00:02,000 | One.\nExtra commentary.'}}}},
-        {choices = {{message = {content = '00:00:02,000 --> 00:00:03,000 | Wrong timestamp.'}}}}}) do
+        {choices = {{message = {content = '00:00:02,000 --> 00:00:03,000 | Wrong timestamp.'}}}},
+        {choices = {{finish_reason = 'length', message = {content = '00:00:00,000 --> 00:00:02,000 | Truncated.'}}}}}) do
         boot(a, {api_key = 'mock-only', api_mode = 'translation-invalid-' .. index})
         state.sub = {external = true, ['external-filename'] = external}
         handlers['sub-translate']()
@@ -290,7 +334,8 @@ local function suite()
     check(cache.write(ordered, good .. '2\n00:00:02,000 --> 00:00:04,000\nAnother cue.\n\n'), 'ordered fixture')
     state.sub = {external = true, ['external-filename'] = ordered}
     handlers['sub-translate']()
-    jobs[1].callback(true, {status = 0, stdout = utils.format_json({choices = {{message = {
+    calibrate()
+    jobs[2].callback(true, {status = 0, stdout = utils.format_json({choices = {{message = {
         content = '00:00:00,000 --> 00:00:02,000 | First.\n00:00:02,000 --> 00:00:04,000 | Second.'}}}})})
     local ordered_result
     for _, command in ipairs(commands) do
@@ -336,9 +381,10 @@ local function suite()
     state.sub = {external = true, ['external-filename'] = parallel}
     handlers['sub-translate']()
     check(#jobs == 1, 'translation dispatches one budgeted batch at a time')
+    calibrate()
     for _, i in ipairs({1, 2}) do
         if i > 1 then advance() end
-        jobs[i].callback(true, {status = 0, stdout = utils.format_json({choices = {{message = {
+        jobs[i + 1].callback(true, {status = 0, stdout = utils.format_json({choices = {{message = {
             content = table.concat(replies[i], '\n')}}}})})
     end
     local parallel_result
@@ -353,7 +399,7 @@ local function suite()
     events['file-loaded']()
     handlers['sub-fastwhisper-manager']()
     local manager = utils.parse_json(commands[#commands][4])
-    check(manager.type == 'ai-subtitle-manager' and manager.items[3].title:find('有有效'), 'management shows current completed cache')
+    check(manager.type == 'ai-subtitle-manager' and manager.items[2].title == '加载原文字幕', 'management shows current completed cache')
     handlers['sub-fastwhisper-regenerate']()
     check(#jobs == 1 and cache.read(completed) == good, 'regeneration bypasses reuse and retains old completed result')
     complete('', 7)
@@ -539,6 +585,140 @@ local function suite()
     local wrote = cache.write_atomic(progress, 'new progress')
     os.rename = original_rename
     check(not wrote and cache.read(progress) == 'old progress', 'progress installation failure preserves previous budget')
+    for i, item in ipairs({{'en', false}, {'English', false}, {'zh', false}, {'zh-TW', false}, {'yue', false},
+        {'ja', true}, {'Japanese', true}, {'ko', true}, {'fr', true}, {'', false}}) do
+        boot(b, {model = 'auto-language-' .. i, api_key = 'mock-only', language = item[1]})
+        handlers['sub-fastwhisper'](); complete(good)
+        check((#jobs == 2) == item[2], 'automatic language rule: ' .. item[1])
+        hooks.on_unload()
+    end
+    boot(b, {model = 'auto-disabled', api_key = 'mock-only', language = 'ja', auto_translate = 'no'})
+    handlers['sub-fastwhisper'](); complete(good)
+    check(#jobs == 1, 'auto off keeps Japanese original without API')
+    handlers['sub-fastwhisper-auto-translate-toggle']()
+    handlers['sub-fastwhisper']()
+    check(#jobs == 2, 'explicit generate on cached Japanese can start calibration after enabling auto')
+    hooks.on_unload()
+    boot(b, {model = 'detected-ja', api_key = 'mock-only'})
+    handlers['sub-fastwhisper']()
+    check(cache.write(utils.join_path(output(jobs[1]), 'clip.json'), utils.format_json({language = 'ja'})), 'detected language fixture')
+    complete(good)
+    check(#jobs == 2, 'backend-detected Japanese starts calibration without forced language')
+    hooks.on_unload()
+    boot(a, {api_key = 'mock-only', api_mode = 'review-selected-source'})
+    state.sub = {external = true, ['external-filename'] = external}
+    handlers['sub-translate'](); calibrate()
+    jobs[#jobs].callback(true, {status = 0, stdout = utils.format_json({choices = {{message = {
+        content = '00:00:00,000 --> 00:00:02,000 | Old source translation.'}}}})})
+    local newer = path('translation-input/new-selection.srt')
+    check(cache.write(newer, good:gsub('A valid subtitle.', 'A different selected subtitle.')), 'second external subtitle fixture')
+    state.sub = {external = true, ['external-filename'] = newer}
+    handlers['sub-fastwhisper-manager']()
+    manager = state['user-data/ai-subtitles/menu']
+    local reload
+    for _, item in ipairs(manager.items) do if item.id == 'translate' then reload = item end end
+    check(reload and reload.title ~= '加载双语字幕', 'changing selected SRT must not offer previous source translation')
+    local before = #jobs
+    handlers['sub-fastwhisper-translate-resume'](); advance()
+    check(#jobs == before + 1, 'translation action must process newly selected subtitle instead of resuming completed old job')
+    local body
+    for i, value in ipairs(jobs[#jobs].spec.args) do if value == '--data-binary' then body = jobs[#jobs].spec.args[i + 1]:sub(2) end end
+    check(cache.read(body):find('different selected subtitle', 1, true), 'request body belongs to the new selected source')
+    handlers['sub-fastwhisper-translation-cancel']()
+    state.sub = {external=false, codec='ass'}
+    handlers['sub-fastwhisper-manager']()
+    local selected_action
+    for _, item in ipairs(state['user-data/ai-subtitles/menu'].items) do if item.id == 'translate' then selected_action = item end end
+    check(selected_action and not selected_action.selectable, 'unsupported selected track must not silently translate a previously selected SRT')
+    hooks.on_unload()
+    boot(b, {model = 'review-multiple-audio'})
+    state.aid = 2
+    state['track-list'] = {{id=1,type='audio',['ff-index']=1}, {id=2,type='audio',['ff-index']=2}}
+    state['current-tracks/audio'] = {id=2,['ff-index']=2}
+    handlers['sub-fastwhisper']()
+    local extraction = jobs[1]
+    check(extraction.spec.args[1] == 'ffmpeg' and arg(extraction, '-map') == '0:2', 'whole recognition explicitly extracts the selected second audio stream')
+    local pcm = extraction.spec.args[#extraction.spec.args]
+    check(cache.write(pcm, 'pcm fixture'), 'whole audio extraction fixture')
+    extraction.callback(true, {status=0})
+    check(#jobs == 2 and jobs[2].spec.args[2] == pcm, 'Whisper receives selected stream PCM instead of original multi-track video')
+    complete(good)
+    check(state['user-data/ai-subtitles/status'].cached and not cache.read(pcm), 'selected stream result cached and intermediate PCM removed')
+    hooks.on_unload()
+    boot(b, {model='review-selection-preserved'})
+    state.sid = '1'
+    handlers['sub-fastwhisper']()
+    state.sid, state.sub = '7', {external=true,['external-filename']=newer}
+    complete(good)
+    local loaded
+    for _, command in ipairs(commands) do if command[1] == 'sub-add' then loaded = command end end
+    check(loaded and loaded[3] == 'auto', 'recognition result must not replace a subtitle selected while working')
+    hooks.on_unload()
+    boot(a, {api_key='mock-only', api_mode='review-deferred-selection', defer_subtitle_load=true})
+    state.sid, state.sub = '1', {external=true,['external-filename']=external}
+    handlers['sub-translate'](); calibrate()
+    state.sid, state.sub = '7', {external=true,['external-filename']=newer}
+    jobs[#jobs].callback(true, {status=0, stdout=utils.format_json({choices={{message={
+        content='00:00:00,000 --> 00:00:02,000 | Deferred translated result.'}}}})})
+    check(#state.subtitle_jobs == 1, 'partial/final result coalesce while the same background track is loading')
+    local subtitle_job = state.subtitle_jobs[1]
+    fake.commandv(subtitle_job.spec[1], subtitle_job.spec[2], subtitle_job.spec[3])
+    state.sid = tostring(state['track-list'][1].id)
+    subtitle_job.callback(true)
+    check(state.sid == '7', 'async track loading completion restores user selection after mpv auto-selects result')
+    state.sid, state.sub = 'no', nil
+    handlers['sub-fastwhisper-load-bilingual']()
+    check(state.sid ~= 'no', 'explicit load bilingual action re-enables subtitles after the user disabled them')
+    hooks.on_unload()
+    boot(b, {model='review-user-disabled', defer_subtitle_load=true})
+    state.sid = '7'
+    handlers['sub-fastwhisper'](); state.sid = 'no'; complete(good)
+    check(#state.subtitle_jobs == 1, 'user disabling subtitles during recognition requests a preserving load')
+    subtitle_job = state.subtitle_jobs[1]
+    fake.commandv(subtitle_job.spec[1], subtitle_job.spec[2], subtitle_job.spec[3])
+    state.sid = tostring(state['track-list'][1].id)
+    subtitle_job.callback(true)
+    check(state.sid == 'no', 'recognition completion keeps subtitles disabled by the user')
+    hooks.on_unload()
+    boot(b, {model='review-auto-selection', api_key='mock-only', language='ja', defer_subtitle_load=true})
+    state.sid, state.sub = '1', {external=true,['external-filename']=external}
+    handlers['sub-fastwhisper']()
+    state.sid, state.sub = '7', {external=true,['external-filename']=newer}
+    complete(good); calibrate()
+    jobs[#jobs].callback(true, {status=0, stdout=utils.format_json({choices={{message={
+        content='00:00:00,000 --> 00:00:02,000 | Automatic translated result.'}}}})})
+    for _, pending_sub in ipairs(state.subtitle_jobs) do
+        fake.commandv(pending_sub.spec[1], pending_sub.spec[2], pending_sub.spec[3])
+        state.sid = tostring(state['track-list'][#state['track-list']].id)
+        pending_sub.callback(true)
+    end
+    check(state.sid == '7', 'automatic translation also preserves a subtitle selected during preceding recognition')
+    hooks.on_unload()
+    boot(b, {model='review-no-audio'}); state.aid = false
+    handlers['sub-fastwhisper']()
+    check(#jobs == 0 and state.osd:find('音轨'), 'disabled audio cannot silently recognize a different stream')
+    boot(b, {model='review-external-audio'})
+    state['current-tracks/audio'] = {external=true}
+    handlers['sub-fastwhisper']()
+    check(#jobs == 0 and state.osd:find('外挂'), 'unsupported external audio fails before starting wrong-source recognition')
+    boot('https://example.invalid/review.mkv', {model='review-network'})
+    state.cache, state['demuxer-cache-state'] = 'auto', {['seekable-ranges']={{start=0,['end']=4}}}
+    handlers['sub-fastwhisper']()
+    check(#jobs == 1 and state['user-data/ai-subtitles/status'].running, 'network recognition is asynchronous and cancellable')
+    complete(good)
+    handlers['sub-fastwhisper-cancel'](); advance()
+    check(not state['user-data/ai-subtitles/status'].running and #jobs == 1, 'network wait/recognition cancellation prevents further work')
+    boot('https://example.invalid/finite.mkv', {model='review-network-eof'})
+    state.cache, state['demuxer-cache-state'] = 'auto', {['seekable-ranges']={{start=0,['end']=3.96}}, ['eof-cached']=true}
+    handlers['sub-fastwhisper'](); complete(good); advance()
+    check(state['user-data/ai-subtitles/status'].cached and not state['user-data/ai-subtitles/status'].running,
+        'fully cached finite video completes when last packet timestamp precedes media duration')
+    hooks.on_unload()
+    boot('https://example.invalid/gapped.mkv', {model='review-network-gap'})
+    state.cache, state['demuxer-cache-state'] = 'auto', {['seekable-ranges']={{start=1,['end']=4}}, ['eof-cached']=true}
+    handlers['sub-fastwhisper'](); complete(good); advance()
+    check(not state['user-data/ai-subtitles/status'].cached and not state['user-data/ai-subtitles/status'].running,
+        'network cache missing the beginning is never committed as a full transcript')
 end
 host.add_timeout(0.1, function()
     local ok, err = pcall(suite)

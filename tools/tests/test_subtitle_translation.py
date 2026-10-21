@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import time
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
@@ -23,6 +24,7 @@ def main():
     parser.add_argument('--offline', action='store_true', help='Use local HTTP responses for display/regression diagnosis')
     parser.add_argument('--offline-failures', type=int, default=0, help='Return HTTP 429 before local successes')
     parser.add_argument('--offline-budget', action='store_true', help='Pause at one request, then resume through script message')
+    parser.add_argument('--offline-delay', type=float, default=0, help='Delay successful calibration (0..20 seconds) to verify ongoing feedback')
     parser.add_argument('--subtitles', type=Path, help='Explicit SRT to upload instead of the three fixed English cues')
     parser.add_argument('--target', choices=['Chinese', 'English'], default='Chinese')
     parser.add_argument('--reuse', type=Path, help='Reopen a previous test directory and require zero new API requests')
@@ -35,6 +37,8 @@ def main():
         parser.error('--offline uses a fresh fixed English-to-Chinese fixture')
     if not 0 <= args.offline_failures <= 2 or ((args.offline_failures or args.offline_budget) and not args.offline):
         parser.error('0..2 injected failures and budget test require --offline')
+    if not 0 <= args.offline_delay <= 20 or (args.offline_delay and not args.offline):
+        parser.error('0..20 seconds of delay requires --offline')
     local = ROOT / 'local.conf'
     settings = dict(api_key='offline-test', api_url='', api_mode='offline-test')
     if not args.offline:
@@ -67,10 +71,12 @@ def main():
                '--script-opts-append=translation-test-target=' + args.target,
                '--script-opts-append=translation-test-custom=' + ('yes' if args.subtitles else 'no'),
                '--script-opts-append=translation-test-resume_budget=' + ('yes' if args.offline_budget else 'no'),
+               '--script-opts-append=translation-test-feedback_delay=' + ('yes' if args.offline_delay >= 11 else 'no'),
                '--script-opts-append=sub_fastwhisper-translate=' + args.target,
                '--script-opts-append=translation-test-timeout=' + str(args.timeout), str(fixture)]
     server = None
     server_requests = []
+    server_stages = []
     if args.offline_budget:
         command[-1:-1] = ['--script=' + str(ROOT / 'scripts/uosc'), '--osd-fonts-dir=' + str(ROOT / 'fonts')]
     if args.offline:
@@ -79,15 +85,23 @@ def main():
                 pass
 
             def do_POST(self):
-                self.rfile.read(int(self.headers['Content-Length']))
+                payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                calibration = payload['messages'][0]['content'].startswith('Proofread')
                 server_requests.append(datetime.now().timestamp())
+                server_stages.append('calibration' if calibration else 'translation')
                 failed = len(server_requests) <= args.offline_failures
                 response = {'choices': [{'message': {'content': '\n'.join([
                     '00:00:00,000 --> 00:00:02,000 | 请在下雨前关上窗户。',
                     '00:00:02,000 --> 00:00:04,000 | 火车将于明天早上七点半到达。',
                     '00:00:04,000 --> 00:00:06,000 | 所有生成的字幕必须保留在缓存文件夹中。'])}}], 'usage': {'total_tokens': 123}}
+                if calibration:
+                    response['choices'][0]['message']['content'] = payload['messages'][1]['content'].replace('windwo', 'window')
+                else:
+                    assert 'windwo' not in payload['messages'][1]['content'], 'translation must use corrected transcript'
                 if failed:
                     response = {'error': {'message': 'Local deliberate rate limit'}}
+                elif calibration and args.offline_delay:
+                    time.sleep(args.offline_delay)
                 body = json.dumps(response, ensure_ascii=False).encode('utf-8')
                 self.send_response(429 if failed else 200)
                 if failed:
@@ -123,26 +137,31 @@ def main():
     translated = Path(result['translated']) if result.get('translated') else None
     timeline = validate_timeline(translated, 86400) if translated and translated.is_file() else {}
     reference = validate_timeline(folder / 'original.srt', 86400)
-    request_count = console.count('AI subtitle translation in progress')
+    request_count = console.count('AI subtitle translation in progress') + console.count('AI subtitle calibration in progress')
     png = folder / 'translated.png'
     passed = (process.returncode == 0 and not timed_out and result.get('passed') and timeline.get('passed')
               and reference.get('passed') and len(timeline.get('cues', [])) == len(reference['cues'])
-              and request_count == (0 if args.reuse else (len(reference['cues']) + 19) // 20 + args.offline_failures) and png.is_file()
+              and request_count == (0 if args.reuse else 1 + (len(reference['cues']) + 19) // 20 + args.offline_failures) and png.is_file()
               and png.stat().st_size > 1024 and 'TRANSLATION PLAYBACK FAIL:' not in console)
     if passed:
         passed = all(cue['start'] == original['start'] and cue['end'] == original['end']
                      for cue, original in zip(timeline['cues'], reference['cues']))
+        calibrated = validate_timeline(translated.with_name('subtitles.calibrated.srt'), 86400)
+        passed = passed and calibrated.get('passed') and len(calibrated.get('cues', [])) == len(reference['cues'])
     if args.offline:
         passed = passed and len(server_requests) == request_count
         if args.offline_failures:
             passed = passed and all(b - a >= 3.8 for a, b in zip(server_requests, server_requests[1:]))
     if args.offline_budget:
         passed = passed and result.get('budget_resumed')
+    if args.offline_delay >= 11:
+        passed = passed and result.get('feedback_verified') and (folder / 'working.png').is_file() and (folder / 'busy-menu.png').is_file()
     report = dict(passed=bool(passed), exit_code=process.returncode, timed_out=timed_out,
                   model=settings['api_mode'], endpoint=settings['api_url'], api_requests=request_count,
                   real_api=not args.offline,
                   reused=bool(args.reuse),
                   server_requests=server_requests,
+                  server_stages=server_stages,
                   target=args.target, reference=reference,
                   result=result, timeline=timeline)
     report_path = folder / ('reuse-report.json' if args.reuse else 'report.json')

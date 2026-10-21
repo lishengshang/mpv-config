@@ -223,7 +223,7 @@ def run(args):
         stats = dict(model=Path(args.model).name, device=torch.cuda.get_device_name(), dtype='bfloat16',
                      duration=duration, elapsed=round(time.monotonic() - started, 2),
                      peak_allocated_mib=round(torch.cuda.max_memory_allocated() / 1048576),
-                     coarse_chunks=coarse, cues=len(payload))
+                     coarse_chunks=coarse, cues=len(payload), languages=sorted({r['language'] for r in records}))
         (output.parent / 'qwen-stats.json').write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding='utf-8')
         print('QWEN_ASR_OK ' + json.dumps(stats, ensure_ascii=False), flush=True)
 
