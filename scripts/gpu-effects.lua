@@ -7,10 +7,9 @@ local o = {runtime_path = '', probe_timeout = 20, initialization_timeout = 300}
 options.read_options(o, 'gpu-effects')
 local name, label = mp.get_script_name(), 'gpu-effects'
 local presets, order = {}, {}
--- “高级”里仍按算法分组（group 1-4）；面向用户的入口在下面按“需求”组织。
-local groups = {'轻量超分', '补帧', '降噪', '超分与组合'}
+-- group 1-4 用于用途摘要，入口按需求组织。
 local function preset(id, label, group, key, shader, meta)
-    -- label 面向用户（效果 + 取向），id 面向维护与键位；tech 只在“高级”里露出。
+    -- label 面向用户（效果 + 取向），id 面向维护与键位；tech 放在问号说明中。
     local p = {id = id, title = label, label = label, group = group, key = key, shader = shader,
         use = meta.use, condition = meta.condition, cost = meta.cost, tech = meta.tech,
         cost_short = meta.cost_short, min_ratio = meta.min_ratio}
@@ -356,17 +355,16 @@ enough_upscale = function(p)
 end
 describe = function(p)
     return '用途：' .. p.use .. '\n条件：' .. p.condition .. '\n负担：' .. p.cost ..
-        '\n操作：再次选择同一项关闭；切换下一个视频会恢复默认。'
+        '\n操作：再次选择同一项关闭；切换下一个视频会关闭本次增强。'
 end
 menu_hint = function(p, reason)
-    if reason then return '缺组件 · 点击查看原因' end
+    if reason then return '缺组件' end
     if pending and pending.id == p.id then
-        return pending.stage == 'init' and '正在准备，尚未生效…' or '正在检查依赖…'
+        return pending.stage == 'init' and '准备中' or '检查中'
     end
     local parts = {}
-    if p.min_ratio and not enough_upscale(p) then parts[#parts + 1] = '估算倍率未达触发范围' end
+    if p.min_ratio and not enough_upscale(p) then parts[#parts + 1] = '倍率不足' end
     if p.cost_short then parts[#parts + 1] = p.cost_short end
-    if p.key then parts[#parts + 1] = p.key end
     return table.concat(parts, ' · ')
 end
 local function toggle(id)
@@ -413,55 +411,77 @@ local function command(action, arg)
     return {'script-message-to', name, action, arg or ''}
 end
 -- 面向用户的入口：先问“想改善什么”，再按片源类型给少量方案。
--- 模型名、后端与单项 shader 放在“高级”里，普通用户不需要先理解它们。
--- 方案详情页：选择前就能看到“适合 / 条件 / 负担 / 如何撤销”，技术信息再进一层。
-local function preset_page(id, current)
+-- 模型名与后端放在问号说明中，普通用户不需要先理解它们。
+-- 长说明按显示宽度拆行，只在问号帮助页中展示，不参与操作菜单宽度估算。
+local function explanation(items, text)
+    local dimensions = mp.get_property_native('osd-dimensions', {}) or {}
+    local limit = math.max(14, math.min(38, math.floor((dimensions.w or 960) / 15) - 8))
+    local line, width = '', 0
+    for char in text:gmatch('[%z\1-\127\194-\244][\128-\191]*') do
+        local size = #char == 1 and 1 or 2
+        if char == '\n' or width + size > limit then
+            if line ~= '' then items[#items + 1] = {title = line, selectable = false} end
+            line, width = '', 0
+        end
+        if char ~= '\n' then line, width = line .. char, width + size end
+    end
+    if line ~= '' then items[#items + 1] = {title = line, selectable = false} end
+end
+local summaries = {
+    [1] = '放大动画，改善线条', [2] = '帧率翻倍，改善运动',
+    [3] = '减少颗粒与噪点', [4] = 'AI 放大，改变纹理与线条',
+}
+local menu_titles = {
+    MEMC_RIFE_TRT = '常用补帧 · RIFE', MEMC_RIFE_DML = '兼容补帧 · RIFE',
+    MEMC_DRBA_TRT = '动画补帧 · DRBA', MEMC_DRBA_DML = '兼容补帧 · DRBA',
+    SR_ARTCNN_TRT = 'ArtCNN 2×', SR_ARTCNN_CHROMA_TRT = 'ArtCNN 2×＋色度',
+    SR_AnimeJaNaiV2_TRT = 'AnimeJaNai V2', SR_AnimeJaNaiV3_TRT = 'AnimeJaNai V3 锐化',
+    SR_AnimeJaNaiV2_DML = 'AnimeJaNai V2 兼容', SR_HFA2k_TRT = '真人超分 · 试用',
+    SR_Anime1080Fixer_TRT = '动画修复 · 不放大', MIX_SR_MEMC_TRT = '超分＋补帧',
+}
+local function preset_page(id, current, path)
     local p = presets[id]
     local reason = missing(p)
-    local kids = {}
-    if reason then
-        kids[#kids + 1] = {title = reason:gsub('\n', ' '), selectable = false, muted = true}
-    end
-    kids[#kids + 1] = {title = '适合：' .. p.use, selectable = false, muted = true}
-    kids[#kids + 1] = {title = '条件：' .. p.condition, selectable = false, muted = true}
-    kids[#kids + 1] = {title = '负担：' .. p.cost, selectable = false, muted = true}
-    kids[#kids + 1] = {title = '启用此方案（再次选择关闭；下一视频恢复默认）',
+    local help = {}
+    if reason then explanation(help, reason) end
+    explanation(help, '适合：' .. p.use)
+    explanation(help, '条件：' .. p.condition)
+    explanation(help, '负担：' .. p.cost)
+    explanation(help, '技术：' .. p.tech)
+    explanation(help, '键位：' .. (p.key or '无'))
+    explanation(help, '再次选择关闭；下一视频自动关闭本次增强。')
+    local help_id = 'gpu-help-' .. path .. '-' .. id
+    local summary = id == 'SR_Anime1080Fixer_TRT' and '修复线条，保持尺寸' or
+        id == 'MIX_SR_MEMC_TRT' and '动画放大并补帧' or summaries[p.group]
+    local kids = {{title = summary, selectable = false, muted = true}}
+    kids[#kids + 1] = {title = pending and pending.id == id and '取消准备' or
+            current == id and '关闭此方案' or '启用此方案',
         value = command('toggle', p.id), active = current == p.id, muted = reason ~= nil,
         hint = menu_hint(p, reason)}
-    kids[#kids + 1] = {title = '技术详情…', items = {
-        {title = p.tech, selectable = false, muted = true},
-        {title = '键位：' .. (p.key or '无'), selectable = false, muted = true}}}
-    return {title = p.label, items = kids, muted = reason ~= nil, active = current == p.id,
-        hint = reason and '缺组件 · 点击查看原因' or p.cost_short}
+    kids[#kids + 1] = {id = help_id, title = '方案说明', icon = 'help_outline', items = help,
+        footnote = false, read_only = true, search_style = 'disabled'}
+    return {title = menu_titles[id] or p.label, items = kids, muted = reason ~= nil, active = current == p.id,
+        hint = menu_hint(p, reason), footnote = '点击 ? 查看条件、负担与键位', footnote_menu = help_id}
 end
 local requirements = {
-    {title = '放大后更清楚（超分）…', items = {
-        {title = '动画 / 番剧…', items = {
-            {id = 'ArtCNN_C4F16'}, {id = 'ArtCNN_C4F32'},
-            {title = '更多模型与风格…', items = {
-                {id = 'SR_AnimeJaNaiV3_TRT'}, {id = 'SR_AnimeJaNaiV2_TRT'},
-                {id = 'SR_ARTCNN_TRT'}, {id = 'SR_ARTCNN_CHROMA_TRT'},
-                {id = 'SR_AnimeJaNaiV2_DML'}}}}},
-        {title = '真人 / 电影…', items = {
-            {id = 'SR_HFA2k_TRT'},
-            {title = '不要 AI 超分：撤销并回到内置缩放', value = command('reset'),
-                hint = '等于“恢复开启前效果”；内置 HQ 算法组继续工作'}}},
-        {title = '不确定片源类型…', items = {
-            {title = '动画看线条与大面积平涂，真人看皮肤纹理与噪点；选错可用“暂时关闭，对比效果”切回。',
-                selectable = false, muted = true},
-            {title = '先试最轻的：动画放大 · 省资源', toggle = 'ArtCNN_C4F16', hint = '负担低'}}}}},
-    {title = '动作更流畅（补帧）…', items = {
+    {title = '放大更清楚…', items = {
+        {id = 'ArtCNN_C4F16'}, {id = 'ArtCNN_C4F32'},
+        {title = '更多动画模型…', items = {
+            {id = 'SR_AnimeJaNaiV3_TRT'}, {id = 'SR_AnimeJaNaiV2_TRT'},
+            {id = 'SR_ARTCNN_TRT'}, {id = 'SR_ARTCNN_CHROMA_TRT'},
+            {id = 'SR_AnimeJaNaiV2_DML'}}},
+        {id = 'SR_HFA2k_TRT'}}},
+    {title = '动作更流畅…', items = {
         {id = 'MEMC_RIFE_TRT'}, {id = 'MEMC_RIFE_DML'},
         {id = 'MEMC_DRBA_TRT'}, {id = 'MEMC_DRBA_DML'}}},
     {title = '减少噪点…', items = {
         {id = 'NR_BILATERAL_CUDA'}, {id = 'NR_DFTTEST_CUDA'}, {id = 'NR_BM3D_CUDA'}}},
-    {title = '修复动画画面（不放大）…', items = {{id = 'SR_Anime1080Fixer_TRT'}}},
-    {title = '渐变有一圈圈条纹（色带）', deband = true, value = {'cycle', 'deband'},
-        hint = 'mpv 内置独立开关 · 不受“恢复开启前效果”与跨文件重置影响'},
-    {title = '超分＋补帧（负担较高）…', items = {{id = 'MIX_SR_MEMC_TRT'}}},
+    {id = 'SR_Anime1080Fixer_TRT'},
+    {title = '去色带', deband = true, value = {'cycle', 'deband'}, hint = '独立开关'},
+    {id = 'MIX_SR_MEMC_TRT'},
 }
-local function resolve(node, current)
-    if node.id then return preset_page(node.id, current) end
+local function resolve(node, current, path)
+    if node.id then return preset_page(node.id, current, path) end
     local item = {title = node.title, selectable = node.selectable, muted = node.muted, hint = node.hint}
     if node.deband then
         item.title = '去色带：' .. (mp.get_property_native('deband', false) == true and '已开启' or '关闭')
@@ -470,65 +490,60 @@ local function resolve(node, current)
     elseif node.value then item.value = node.value end
     if node.items then
         item.items = {}
-        for _, child in ipairs(node.items) do item.items[#item.items + 1] = resolve(child, current) end
+        for i, child in ipairs(node.items) do item.items[#item.items + 1] = resolve(child, current, path .. '-' .. i) end
     end
     return item
 end
-local function advanced(current)
-    local kids = {{title = '当前增强技术详情', selectable = false, muted = true,
-        hint = current and presets[current].tech or '未启用增强'}}
-    for index, title in ipairs(groups) do
-        local children = {}
-        for _, p in ipairs(order) do
-            if p.group == index then
-                local reason = missing(p)
-                children[#children + 1] = {title = p.id, value = command('toggle', p.id),
-                    active = current == p.id, muted = reason ~= nil, hint = p.tech}
-            end
-        end
-        kids[#kids + 1] = {title = title, items = children}
+local function recovery_menu()
+    return {id = 'gpu-recovery', title = '清空滤镜与着色器…', items = {
+        {title = '清空视频滤镜', value = command('clear-vf'), hint = 'ALT+~'},
+        {title = '清空着色器', value = command('clear-shaders'), hint = 'CTRL+0'},
+        {title = '同时清空两者', value = command('restore-defaults')},
+    }}
+end
+local function usage_help()
+    local items = {}
+    explanation(items, '按需求选择：放大更清楚、动作更流畅、减少噪点、动画修复、去色带或超分＋补帧。')
+    explanation(items, '方案页只显示用途与开关；点击 ? 或进入“方案说明”查看适用条件、负担、模型与键位。')
+    explanation(items, '一次只启用一个增强，选另一项会替换；重复选择同一项关闭，下一视频自动关闭本次增强。')
+    explanation(items, '先试动画轻量放大；真人超分仍属试用。动画修复保持尺寸，超分＋补帧同时处理清晰度与流畅度。')
+    explanation(items, '“暂时关闭，对比效果”保留选择；“关闭当前增强”只撤销本次增强，保留其他滤镜，并恢复开启前的 shader。')
+    explanation(items, '“清空滤镜与着色器”会清除对应完整列表，包括从其他入口添加的效果；ALT+~ 清空滤镜，CTRL+0 清空着色器。')
+    explanation(items, '清空后不找回临时效果，沿用当前基础渲染参数。它不会重置缩放、色彩等画质选项，也不会重新加载 mpv.conf。')
+    explanation(items, '去色带是独立开关，不受增强的对比、恢复与跨文件重置影响。')
+    explanation(items, '轻量 shader 无需 VS；其他方案需 VS 运行时、插件和模型，见 docs/gpu-setup.md。')
+    explanation(items, '窗口较小时不侧向预览子菜单；点击或按 → 进入，按 ← 返回，Esc 关闭。')
+    local st = source_state()
+    if st.ratio then
+        explanation(items, string.format('估算放大 %.2f×：滤镜输出 %d×%d → 渲染目标 %d×%d；不含黑边与滤镜细节差异。',
+            st.ratio, st.source_w, st.source_h, st.target_w, st.target_h))
     end
-    kids[#kids + 1] = {title = '着色器组合预设（NNEDI3 / FSRCNNX / ravu / Anime4K…）',
-        selectable = false, muted = true, hint = 'ALT+1..8 组合预设；单项 shader 用 CTRL+1..9'}
-    kids[#kids + 1] = {title = '清空全部视频滤镜（ALT+~）', value = command('clear-vf')}
-    kids[#kids + 1] = {title = '清空全部着色器（CTRL+0）', value = command('clear-shaders')}
-    kids[#kids + 1] = {title = '依赖与安装说明', value = command('help')}
-    return {title = '高级：模型、算法与渲染设置…', items = kids}
+    if st.hdr then explanation(items, 'HDR 片源尚未验证，建议先对比。') end
+    explanation(items, '最近状态：' .. last_message)
+    return {id = 'gpu-help', title = '使用说明', icon = 'help_outline', items = items,
+        footnote = false, read_only = true, search_style = 'disabled'}
 end
 local function menu_data()
     local current = chosen()
-    local st = source_state()
     local items = {}
     if current then
-        items[#items + 1] = {title = '当前效果：' .. presets[current].label .. (suspended and '（已暂时关闭）' or ''),
-            selectable = false, muted = true,
-            hint = '增强仅当前视频生效，下一视频恢复默认；去色带为独立开关，不受此范围限制'}
+        items[#items + 1] = {title = '当前：' .. (menu_titles[current] or presets[current].label),
+            selectable = false, muted = true, hint = suspended and '对比中' or '已开启'}
     else
-        items[#items + 1] = {title = pending and ('当前效果：准备中 · ' .. presets[pending.id].label) or '当前效果：未启用增强',
-            selectable = false, muted = true,
-            hint = '增强仅当前视频生效，下一视频恢复默认；去色带为独立开关，不受此范围限制'}
+        items[#items + 1] = {title = pending and ('准备：' .. (menu_titles[pending.id] or presets[pending.id].label)) or '当前：未启用增强',
+            selectable = false, muted = true}
     end
-    if st.ratio then
-        items[#items + 1] = {title = string.format('估算放大 %.2f×（滤镜输出 %d×%d → 渲染目标 %d×%d）',
-                st.ratio, math.floor(st.source_w), math.floor(st.source_h),
-                math.floor(st.target_w), math.floor(st.target_h)),
-            selectable = false, muted = true,
-            hint = st.hdr and 'HDR 片源：本机尚未验证，建议先对比' or '估算值：不含黑边与滤镜细节差异'}
-    elseif st.hdr then
-        items[#items + 1] = {title = 'HDR 片源：本机尚未验证，建议先对比', selectable = false, muted = true}
+    for i, node in ipairs(requirements) do items[#items + 1] = resolve(node, current, tostring(i)) end
+    if current then
+        items[#items + 1] = {title = suspended and '切回增强效果（结束对比）' or '暂时关闭，对比效果',
+            value = command('compare'), hint = pending and '准备中' or suspended and '对比中' or '保留选择',
+            selectable = pending == nil, muted = pending ~= nil}
+        items[#items + 1] = {title = '关闭当前增强', value = command('reset'), hint = '保留其他效果'}
     end
-    for _, node in ipairs(requirements) do items[#items + 1] = resolve(node, current) end
-    items[#items + 1] = suspended and
-        {title = '切回增强效果（结束对比）', value = command('compare'),
-            hint = '当前已暂时关闭：' .. presets[suspended.id].label} or
-        {title = '暂时关闭，对比效果', value = command('compare'),
-            hint = current and '不撤销选择，切回开启前的画面' or '先开启一项增强'}
-    items[#items + 1] = {title = '恢复开启前效果', value = command('reset'),
-        hint = '撤销本次增强，恢复开启前的滤镜与 shader'}
-    items[#items + 1] = advanced(current)
-    items[#items + 1] = {title = '我该选哪个？说明…', value = command('help')}
-    return {type = 'gpu-effects', title = '画面增强 · 按需求选择', keep_open = true,
-        search_submenus = true, items = items, footnote = last_message:gsub('\n', ' ')}
+    items[#items + 1] = recovery_menu()
+    items[#items + 1] = usage_help()
+    return {type = 'gpu-effects', title = '画面增强', keep_open = true, layout = 'compact',
+        search_submenus = true, items = items, footnote = '点击 ? 查看使用说明与状态', footnote_menu = 'gpu-help'}
 end
 refresh_menu = function()
     if mp.get_property_native('user-data/uosc/menu/type') == 'gpu-effects' then
@@ -542,26 +557,30 @@ mp.register_script_message('toggle', toggle)
 mp.register_script_message('reset', function() reset() end)
 mp.register_script_message('compare', compare)
 mp.register_script_message('help', function()
-    say('按需求选择：放大后更清楚 / 动作更流畅 / 减少噪点 / 修复动画画面 / 去色带 / 超分＋补帧。' ..
-        '\n进入任一方案可先看到“适合 / 条件 / 负担 / 启用”，技术信息在“技术详情”里。' ..
-        '\n一次只启用一个增强，选另一项会替换；重复选择同一项关闭，下一视频恢复默认。' ..
-        '\n想比较效果用“暂时关闭，对比效果”，彻底退出用“恢复开启前效果”。' ..
-        '\n去色带是 mpv 内置的独立开关，不受上面两条的恢复范围限制。' ..
-        '\n轻量 shader 无需 VS；其他方案需要 VS 增强包与对应模型，见 docs/gpu-setup.md。')
+    mp.commandv('script-message-to', 'uosc', 'open-menu', utils.format_json(menu_data()), 'gpu-help')
 end)
-mp.register_script_message('clear-vf', function()
-    cancel(false)
-    suspended = nil
-    local ok, err = mp.commandv('vf', 'clr', '')
-    say(ok and '视频滤镜已清空。' or ('清空失败：' .. tostring(err)))
-end)
-mp.register_script_message('clear-shaders', function()
-    cancel()
-    suspended = nil
-    local ok, err = mp.set_property_native('glsl-shaders', {})
-    if ok then baseline, applied_shader = nil, nil end
-    say(ok and '着色器已清空。' or ('清空失败：' .. tostring(err)))
-end)
+local function clear_effects(clear_vf, clear_shader)
+    local restored, reason = cancel(not clear_vf)
+    if not restored then say('取消增强失败：' .. tostring(reason)); return end
+    if clear_vf then
+        local ok, err = mp.commandv('vf', 'clr', '')
+        if not ok then say('视频滤镜清空失败：' .. tostring(err)); return end
+        if suspended and not suspended.shader then suspended = nil end
+    end
+    if clear_shader then
+        local ok, err = set_shaders({})
+        if not ok then
+            say((clear_vf and '视频滤镜已清空；' or '') .. '着色器清空失败：' .. tostring(err)); return
+        end
+        baseline, applied_shader = nil, nil
+        if suspended and suspended.shader then suspended = nil end
+    end
+    say(clear_vf and clear_shader and '视频滤镜与着色器已全部清空；基础渲染参数保持当前设置。' or
+        clear_vf and '视频滤镜已清空。' or '着色器已清空。')
+end
+mp.register_script_message('clear-vf', function() clear_effects(true, false) end)
+mp.register_script_message('clear-shaders', function() clear_effects(false, true) end)
+mp.register_script_message('restore-defaults', function() clear_effects(true, true) end)
 mp.enable_messages('error')
 local function update_message_level()
     -- Paused seeks can reinitialize an already active VS filter. Observe its

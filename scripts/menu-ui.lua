@@ -87,6 +87,7 @@ for line in source:gmatch('[^\r\n]+') do
             e.prop = comment:match('#@value=([%w_/%-]+)') or e.prop or e.state
             e.choices = comment:match('#@choices=([%w%-]+)')
             e.keep = e.prop ~= nil or e.command:match('^script%-message%-to gpu_effects (reset)') ~= nil
+                or e.command:match('^script%-message%-to gpu_effects restore%-defaults') ~= nil
                 or e.command:match('^script%-message%-to gpu_effects clear') ~= nil
                 or e.command:match('^script%-message%-to menu_ui continuous') ~= nil
                 or e.command:match('^script%-message%-to menu_ui shuffle') ~= nil

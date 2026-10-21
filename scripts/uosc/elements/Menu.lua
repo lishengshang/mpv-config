@@ -1,5 +1,8 @@
 local Element = require('elements/Element')
 
+-- Local menu extensions: layout='compact' bounds side previews, footnote_menu
+-- links the question icon to a submenu, read_only enables keyboard text scrolling.
+
 ---@alias MenuAction {name: string; icon: string; label?: string; filter_hidden?: boolean;}
 
 -- Menu data structure accepted by `Menu:open(menu)`.
@@ -338,6 +341,8 @@ function Menu:update_dimensions()
 	local margin = round(self.item_height / 2)
 	local external_buttons_reserve = display.width / self.item_height > 14 and self.scroll_step * 6 - margin * 2 or 0
 	local width_available = display.width - margin * 2 - self.padding * 2 - external_buttons_reserve
+	-- Local extension for dense command menus; keep upstream menu sizing by default.
+	if self.root.layout == 'compact' then width_available = math.min(width_available, round(360 * state.scale)) end
 	local height_available = display.height - margin * 2 - self.padding * 2
 	local min_width = math.min(self.min_width, width_available)
 
@@ -1257,7 +1262,12 @@ function Menu:handle_shortcut(shortcut, info)
 		}))
 	end
 
-	if (key == 'enter' and selected_item) or (id == 'right' and is_submenu and not menu.search) then
+	if menu.read_only and (id == 'up' or id == 'down' or id == 'pgup' or id == 'pgdwn') then
+		local direction = (id == 'up' or id == 'pgup') and -1 or 1
+		self:scroll_by(direction * ((id == 'pgup' or id == 'pgdwn') and menu.height * 0.8 or self.scroll_step))
+	elseif menu.read_only and (id == 'home' or id == 'end') then
+		self:scroll_to(id == 'home' and 0 or menu.scroll_height)
+	elseif (key == 'enter' and selected_item) or (id == 'right' and is_submenu and not menu.search) then
 		self:activate_selected_item(shortcut)
 	elseif id == 'enter' and menu.search and menu.search_debounce == 'submit' then
 		self:search_submit()
@@ -1429,7 +1439,10 @@ function Menu:render()
 		-- Draw submenu if selected
 		local submenu_rect, current_item = nil, is_current and menu.selected_index and menu.items[menu.selected_index]
 		local submenu_is_hovered = false
-		if current_item and current_item.items then
+		-- A partial side preview can obscure the active column or put its controls offscreen.
+		local preview_fits = current_item and current_item.items and
+			bg_rect.bx + self.gap + current_item.width + self.padding * 2 <= display.width - self.gap
+		if current_item and current_item.items and (self.root.layout ~= 'compact' or preview_fits) then
 			submenu_rect = draw_menu(current_item --[[@as MenuStack]], bg_rect.bx + self.gap, 1)
 			cursor:zone('primary_down', submenu_rect, self:create_action(function(shortcut)
 				self:activate_selected_item(shortcut, true)
@@ -1659,7 +1672,11 @@ function Menu:render()
 		end
 
 		-- Footnote / Selected action label
-		if is_current and (menu.footnote or selected_action) then
+		local footnote, footnote_menu = menu.footnote, menu.footnote_menu
+		if footnote == nil and self.root.layout == 'compact' then
+			footnote, footnote_menu = self.root.footnote, self.root.footnote_menu
+		end
+		if is_current and (footnote or selected_action) then
 			local height_half = self.font_size
 			local icon_x, icon_y = content_rect.ax + self.font_size / 2, bg_rect.by + height_half
 			local is_icon_hovered = false
@@ -1670,7 +1687,12 @@ function Menu:render()
 				by = icon_y + height_half,
 			}
 			is_icon_hovered = get_point_to_rectangle_proximity(cursor, icon_hitbox) <= 0
-			local text = selected_action and selected_action.label or is_icon_hovered and menu.footnote
+			if footnote_menu and self.by_id[footnote_menu] then
+				cursor:zone('primary_down', icon_hitbox, self:create_action(function()
+					self:activate_menu(footnote_menu)
+				end))
+			end
+			local text = selected_action and selected_action.label or is_icon_hovered and footnote
 			local opacity = (is_icon_hovered and 1 or 0.5) * menu_opacity
 			ass:icon(icon_x, icon_y, self.font_size, is_icon_hovered and 'help' or 'help_outline', {
 				color = fg, border = state.scale, border_color = bg, opacity = opacity,
@@ -1683,6 +1705,8 @@ function Menu:render()
 					border_color = bg,
 					opacity = menu_opacity,
 					italic = true,
+					wrap = 2,
+					clip = '\\clip(0,0,' .. display.width .. ',' .. display.height .. ')',
 				})
 			end
 		end
@@ -1820,6 +1844,7 @@ function Menu:render()
 
 	while parent_menu do
 		parent_offset_x = parent_offset_x - parent_menu.width - self.padding * 2 - self.gap
+		if self.root.layout == 'compact' and parent_offset_x < self.gap then break end
 		draw_menu(parent_menu, parent_offset_x, parent_horizontal_index)
 		parent_horizontal_index = parent_horizontal_index - 1
 		parent_menu = parent_menu.parent_menu

@@ -1,6 +1,6 @@
 # 在途工作与已知问题
 
-更新：2026-10-21（Asia/Shanghai）。先核对 Git、diff 与证据，开发约束见 [AGENTS.md](AGENTS.md)。
+更新：2026-10-22（Asia/Shanghai）。先核对 Git、diff 与证据，开发约束见 [AGENTS.md](AGENTS.md)。
 
 ## 在途：组件发行与正式版跟随
 

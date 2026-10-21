@@ -32,7 +32,10 @@ local function boot()
                 for _, f in ipairs(state.vf) do
                     if f.label == want then f.enabled = f.enabled == false end
                 end
-            elseif op == 'clr' then state.vf = {} end
+            elseif op == 'clr' then
+                if state.fail_clear_vf then return nil, 'clear failed' end
+                state.vf = {}
+            end
         end
         return true
     end
@@ -162,16 +165,30 @@ local function suite()
     handlers.menu()
     local data = json.parse_json(commands[#commands][4])
     check(data.type == 'gpu-effects' and (data.title or ''):find('画面增强'), 'menu title is user-facing')
-    check(#data.items == 11 and data.items[1].title:find('当前效果'),
-        'requirement entries plus compare, restore, advanced and help')
+    check(#data.items == 9 and data.items[1].title:find('当前：'),
+        'idle root contains requirements, cleanup and help without unavailable actions')
     local rife = data.items[3].items[1]
-    check(rife.title == '动作更流畅 · 补帧（常用）' and rife.items[4].value[2] == 'gpu_effects',
+    check(rife.title == '常用补帧 · RIFE' and rife.items[2].value[2] == 'gpu_effects',
         'preset opens a detail page and routes through script messages')
-    check(rife.items[1].title:find('适合：') and rife.items[2].title:find('条件：') and
-        rife.items[3].title:find('负担：'), 'detail page answers use, condition and cost before enabling')
-    check(data.items[8].title:find('暂时关闭') and data.items[9].title:find('恢复开启前效果')
-        and data.items[10].title:find('高级'), 'compare, restore and advanced are separate actions')
-    check(data.items[10].items[1].title:find('技术详情'), 'advanced keeps model/backend details')
+    check(#rife.items == 3 and rife.footnote_menu == rife.items[3].id and
+        rife.items[3].items[1].title:find('适合：'), 'compact preset keeps explanations behind clickable help')
+    check(data.layout == 'compact' and data.footnote_menu == 'gpu-help', 'main help uses a short clickable footnote')
+    check(data.items[8].id == 'gpu-recovery' and data.items[8].title:find('清空滤镜与着色器'),
+        'cleanup is a second-level menu with an explicit scope')
+    check(#data.items[8].items == 3 and data.items[8].items[3].value[3] == 'restore-defaults',
+        'recovery exposes individual clears and restoring defaults without a model submenu')
+    check(data.items[2].items[1].items[2].value[4] == 'ArtCNN_C4F16' and
+        data.items[5].items[2].value[4] == 'SR_Anime1080Fixer_TRT' and
+        data.items[7].items[2].value[4] == 'MIX_SR_MEMC_TRT',
+        'common presets and single-scheme features skip redundant category pages')
+    check(rife.items[3].read_only and rife.items[3].search_style == 'disabled',
+        'help pages scroll as text without opening type-to-search')
+    local seen = {}
+    local function unique_ids(menu)
+        if menu.id then check(not seen[menu.id], 'help IDs are unique'); seen[menu.id] = true end
+        for _, item in ipairs(menu.items or {}) do unique_ids(item) end
+    end
+    unique_ids(data)
     observations.vf()
     check(commands[#commands][3] == 'update-menu', 'open menu updates after external changes')
     boot()
@@ -232,6 +249,11 @@ local function suite()
     handlers.toggle('ArtCNN_C4F16')
     check(state.osd:find('用途：') and state.osd:find('条件：') and state.osd:find('负担：') and state.osd:find('操作：'),
         'apply message answers use, condition, cost and undo')
+    handlers.menu()
+    local active_menu = json.parse_json(commands[#commands][4])
+    check(#active_menu.items == 11 and active_menu.items[8].value[3] == 'compare' and
+        active_menu.items[9].value[3] == 'reset' and active_menu.items[10].id == 'gpu-recovery',
+        'active menu separates comparing and undoing current enhancement from clearing all chains')
 
     boot()
     state['video-out-params'] = {w = 640, h = 360}
@@ -239,12 +261,14 @@ local function suite()
     state['user-data/uosc/menu/type'] = 'gpu-effects'
     handlers.menu()
     local small = json.parse_json(commands[#commands][4])
-    check(#small.items == 12 and small.items[2].title:find('估算放大') and
-        small.items[2].title:find('滤镜输出 640×360') and small.items[2].title:find('渲染目标 400×225'),
-        'header reports estimated scale from filter output and render target')
-    local page = small.items[3].items[1].items[1]
-    check(page.title == '动画放大 · 省资源' and page.items[1].title:find('适合：') and
-        page.items[4].hint:find('估算倍率未达触发范围') and page.items[4].hint:find('CTRL+ALT+1', 1, true),
+    local help_text = ''
+    for _, row in ipairs(small.items[9].items) do help_text = help_text .. row.title end
+    check(#small.items == 9 and help_text:find('估算放大') and
+        help_text:find('滤镜输出 640×360') and help_text:find('渲染目标 400×225'),
+        'help retains scale facts without enlarging the main menu')
+    local page = small.items[2].items[1]
+    check(page.title == '动画放大 · 省资源' and page.items[3].items[1].title:find('适合：') and
+        page.items[2].hint:find('倍率不足') and page.footnote_menu == page.items[3].id,
         'detail page warns the estimated scale misses the trigger range')
 
     boot()
@@ -252,12 +276,62 @@ local function suite()
     complete({ok = true})
     handlers.menu()
     local pend = json.parse_json(commands[#commands][4])
-    check(pend.items[4].items[1].items[4].hint:find('正在准备'), 'pending state is visible in the menu')
+    check(pend.items[4].items[1].items[2].hint:find('准备中'), 'pending state is visible in the menu')
     hooks['log-message']({prefix = 'vapoursynth', level = 'debug', text = 'initialized.\n'})
     handlers.menu()
     local ready = json.parse_json(commands[#commands][4])
     check(ready.items[4].items[1].hint:find('负担低') and ready.items[4].items[1].active,
         'active leaf after initialization')
+
+    boot()
+    state.vf = {{name = 'crop', label = 'user-crop'}}
+    state['glsl-shaders'] = {'user.glsl'}
+    handlers.toggle('ArtCNN_C4F16')
+    handlers.compare()
+    handlers['restore-defaults']()
+    check(#state.vf == 0 and #state['glsl-shaders'] == 0 and active() == '' and
+        state['user-data/gpu-effects'].compare == '', 'restore defaults clears both complete chains and compare state')
+    handlers.reset()
+    hooks.on_load()
+    check(#state['glsl-shaders'] == 0, 'reset and next file cannot resurrect shaders after restoring defaults')
+    handlers.toggle('ArtCNN_C4F16')
+    handlers.toggle('ArtCNN_C4F16')
+    check(#state['glsl-shaders'] == 0, 'new enhancement uses the cleared baseline')
+
+    boot()
+    handlers.toggle('NR_BILATERAL_CUDA')
+    handlers['restore-defaults']()
+    complete({ok = true})
+    check(#state.vf == 0 and #state['glsl-shaders'] == 0 and jobs[#jobs].aborted,
+        'restoring defaults cancels pending work and rejects its stale completion')
+    start_vs()
+    handlers.compare()
+    handlers['clear-shaders']()
+    check(state['user-data/gpu-effects'].compare == 'NR_BILATERAL_CUDA', 'clearing shaders preserves a VS comparison')
+    handlers.compare()
+    check(active() == 'NR_BILATERAL_CUDA', 'VS comparison still resumes after clearing shaders')
+
+    boot()
+    handlers.toggle('ArtCNN_C4F16')
+    handlers.compare()
+    handlers['clear-vf']()
+    check(state['user-data/gpu-effects'].compare == 'ArtCNN_C4F16', 'clearing VF preserves a shader comparison')
+    handlers.compare()
+    check(active() == 'ArtCNN_C4F16', 'shader comparison still resumes after clearing VF')
+    state.vf = {{name = 'crop'}}
+    state.fail_shader = true
+    handlers['restore-defaults']()
+    check(#state.vf == 0 and active() == 'ArtCNN_C4F16' and state.osd:find('着色器清空失败'),
+        'partial clear failure reports the remaining shader rather than claiming defaults')
+    state.fail_shader = nil
+    handlers['restore-defaults']()
+    check(#state.vf == 0 and #state['glsl-shaders'] == 0, 'retry completes restoring defaults')
+    state.vf = {{name = 'crop'}}
+    state['glsl-shaders'] = {'external.glsl'}
+    state.fail_clear_vf = true
+    handlers['restore-defaults']()
+    check(#state.vf == 1 and #state['glsl-shaders'] == 1 and state.osd:find('视频滤镜清空失败'),
+        'failed VF clear leaves shaders intact and reports failure')
 
     -- 对比中切换方案：新方案生效并结束旧对比，恢复仍能回到原始基线
     boot()
