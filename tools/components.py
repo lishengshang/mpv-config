@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 import zipfile
 
@@ -170,6 +171,126 @@ def target_directory(root, item):
     return root if item['id'] == 'vs' else store.inside(root, f"components/{item['id']}/{item['version']}")
 
 
+def adapt_vs(item, archive, player, output):
+    """Rebuild the VS snapshot against the candidate's reviewed shared ABI dependency."""
+    player = Path(player).resolve()
+    if not (player / 'mpv.exe').is_file() or not (player / 'mpv.com').is_file():
+        raise ValueError('VS adaptation requires a complete candidate player')
+    with zipfile.ZipFile(archive) as zipped:
+        if zipped.getinfo('component.json').file_size > 64 * 1024**2:
+            raise ValueError('Component file index too large')
+        manifest = json.loads(zipped.read('component.json'))
+    replacements = []
+    for file in manifest['files']:
+        candidate = store.inside(player, file['path'])
+        if candidate.is_file() and store.digest(candidate) != file['sha256']:
+            if file['path'] != 'libffi-8.dll':
+                raise ValueError('Unreviewed candidate/VS conflict: ' + file['path'])
+            replacements.append(dict(path=file['path'], snapshot_sha256=file['sha256'],
+                                     candidate_sha256=store.digest(candidate)))
+    if not replacements:
+        return item, archive
+    with tempfile.TemporaryDirectory(prefix='.vs-adapt-', dir=output) as temporary:
+        stage = Path(temporary).resolve()
+        if stage.parent != Path(output).resolve():
+            raise ValueError('Unsafe VS adaptation staging directory')
+        store.unpack(archive, item, stage)
+        for replacement in replacements:
+            destination = store.inside(stage, replacement['path'])
+            shutil.copyfile(store.inside(player, replacement['path']), destination)
+            if store.digest(destination) != replacement['candidate_sha256']:
+                raise ValueError('Candidate dependency changed during adaptation')
+        probe = store.probe('vs', stage)
+        metadata = dict(item.get('metadata', {}), candidate_mpv_sha256=store.digest(player / 'mpv.exe'),
+                        shared_dependencies=replacements, adaptation_probe=probe)
+        adapted = package('vs', walk(stage), output, metadata)
+    return adapted, output / adapted['archive']
+
+
+def prepare(args):
+    """Prepare transport assets; this does not approve redistribution or publish them."""
+    data, base = store.catalog(args.catalog)
+    if not isinstance(base, Path) or any('parts' in item for item in data['components']):
+        raise ValueError('Prepare requires an original local, unsplit catalog')
+    if not 0 < args.part_bytes < 2 * 1024**3:
+        raise ValueError('Part size must be positive and below 2 GiB')
+    bootstrap = data['bootstrap']
+    store.validate_archive(bootstrap)
+    if (bootstrap.get('id') != 'bootstrap' or 'parts' in bootstrap or bootstrap['bytes'] > 128 * 1024**2 or
+            not re.fullmatch(r'bootstrap-[a-f0-9]{16}\.zip', bootstrap['archive'])):
+        raise ValueError('Bootstrap must remain a single pinned archive below 128 MiB')
+    items = [bootstrap, *data['components']]
+    names = [item['archive'].casefold() for item in items]
+    if len(names) != len(set(names)) or any('/' in name or not name.endswith('.zip') for name in names):
+        raise ValueError('Prepare requires distinct flat archive names')
+    if any((item['bytes'] + args.part_bytes - 1) // args.part_bytes > 1000
+           for item in data['components']):
+        raise ValueError('Part size would exceed 1000 parts per archive')
+    output = args.output.resolve()
+    output.mkdir(parents=True, exist_ok=False)
+    extra = sum(item['bytes'] + item['expanded_bytes'] for item in data['components']
+                if item['id'] == 'vs') if getattr(args, 'vs_player', None) else 0
+    if shutil.disk_usage(output).free < sum(item['bytes'] for item in items) + extra + 512 * 1024**2:
+        raise ValueError('Insufficient free space for prepared assets')
+    prepared = []
+    for item in items:
+        source = store.obtain(item, base, output)
+        adapted = False
+        if item['id'] == 'vs' and getattr(args, 'vs_player', None):
+            item, source = adapt_vs(item, source, args.vs_player, output)
+            adapted = source.parent == output
+        result = {key: item[key] for key in ('id', 'version', 'archive', 'bytes', 'expanded_bytes', 'sha256')}
+        if 'metadata' in item:
+            result['metadata'] = item['metadata']
+        if item['id'] == 'bootstrap' or item['bytes'] <= args.part_bytes:
+            if source != output / item['archive']:
+                shutil.copyfile(source, output / item['archive'])
+        else:
+            result['parts'] = []
+            whole = hashlib.sha256()
+            with source.open('rb') as incoming:
+                remaining = item['bytes']
+                while remaining:
+                    name = item['archive'] + f".part{len(result['parts']) + 1:04d}"
+                    count, h = 0, hashlib.sha256()
+                    with (output / name).open('xb') as outgoing:
+                        while count < min(args.part_bytes, remaining):
+                            block = incoming.read(min(1024 * 1024, min(args.part_bytes, remaining) - count))
+                            if not block:
+                                raise ValueError('Source archive changed during preparation')
+                            outgoing.write(block)
+                            h.update(block)
+                            whole.update(block)
+                            count += len(block)
+                    result['parts'].append(dict(archive=name, bytes=count, sha256=h.hexdigest()))
+                    remaining -= count
+            if whole.hexdigest() != item['sha256']:
+                raise ValueError('Source archive changed during preparation')
+            store.validate_archive(result)
+            if adapted:
+                # Only remove the intermediate archive created in this output directory.
+                if source.resolve().parent != output:
+                    raise ValueError('Unsafe adapted archive cleanup path')
+                source.unlink()
+        prepared.append(result)
+        print('PREPARED ' + item['id'], flush=True)
+    (output / 'tools').mkdir()
+    for name in ('components.py', 'component_store.py', 'components.ps1', 'components.cmd', 'qwen_runtime.py'):
+        shutil.copyfile(CONFIG / 'tools' / name, output / 'tools' / name)
+    (output / 'install-components.cmd').write_text('@echo off\ncall "%~dp0tools\\components.cmd" %*\n', encoding='ascii', newline='\n')
+    for item in prepared:
+        for asset in item.get('parts', [item]):
+            path = output / asset['archive']
+            if path.stat().st_size != asset['bytes'] or store.digest(path) != asset['sha256']:
+                raise ValueError('Prepared asset size/SHA256 mismatch')
+    store.atomic_json(output / 'catalog.json', dict(schema=1, platform=data.get('platform'),
+                      bootstrap=prepared[0], components=prepared[1:]))
+    sums = [(store.digest(path), path.relative_to(output).as_posix())
+            for path in sorted(output.rglob('*')) if path.is_file()]
+    (output / 'SHA256SUMS').write_text(''.join(f'{h}  {name}\n' for h, name in sums), encoding='utf-8', newline='\n')
+    print('TRANSPORT CATALOG: ' + str(output / 'catalog.json'))
+
+
 def installed(root):
     items = []
     for kind in store.IDS:
@@ -194,6 +315,8 @@ def status(args):
     for kind in args.components:
         directory = Path(receipts[kind]['root']) if kind in receipts else paths[kind]
         try:
+            if kind == 'vs' and kind in receipts and not store.component_launcher(root).is_file():
+                raise ValueError('Component launcher missing; run configure to repair it')
             health = store.probe(kind, directory)
             if args.hashes and kind in receipts:
                 for index, file in enumerate(receipts[kind]['files']):
@@ -222,6 +345,12 @@ def deploy(args):
         selected.add('media')
     if not selected.issubset(indexed):
         raise ValueError('Catalog does not contain requested components and media dependency')
+    if 'vs' in selected:
+        candidate_sha256 = indexed['vs'].get('metadata', {}).get('candidate_mpv_sha256')
+        if candidate_sha256 and (not re.fullmatch('[a-f0-9]{64}', candidate_sha256) or
+                                 store.digest(root / 'mpv.exe') != candidate_sha256):
+            raise ValueError('Adapted VS catalog does not match this candidate player SHA256')
+        store.component_launcher(root)
     receipts = []
     with store.install_lock(root):
         for kind in ('media', 'vs', 'whisper', 'qwen'):
@@ -269,6 +398,11 @@ def main():
     command.add_argument('--output', type=Path, required=True)
     for name in ('vs-source', 'whisper-source', 'qwen-python', 'ffmpeg', 'ffprobe'):
         command.add_argument('--' + name)
+    command = commands.add_parser('prepare', help='Split a local catalog into Release-sized transport assets')
+    command.add_argument('--catalog', required=True)
+    command.add_argument('--output', type=Path, required=True)
+    command.add_argument('--part-bytes', type=int, default=1900 * 1024**2)
+    command.add_argument('--vs-player', type=Path, help='Adapt the reviewed libffi-8.dll overlap to this candidate and probe VS')
     for name in ('status', 'install', 'configure'):
         command = commands.add_parser(name)
         command.add_argument('--mpv-root', type=Path, default=CONFIG.parent)
@@ -280,7 +414,7 @@ def main():
             command.add_argument('--catalog', required=True)
     args = parser.parse_args()
     try:
-        return {'export': export, 'status': status, 'install': deploy, 'configure': reconfigure}[args.action](args) or 0
+        return {'export': export, 'prepare': prepare, 'status': status, 'install': deploy, 'configure': reconfigure}[args.action](args) or 0
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, zipfile.BadZipFile) as error:
         print('FAIL: ' + str(error), file=sys.stderr)
         return 1

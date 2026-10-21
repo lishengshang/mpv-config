@@ -1,5 +1,6 @@
 """Data-preservation and archive trust-boundary regression; no GPU/downloads required."""
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import zipfile
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import component_store as store
@@ -184,6 +186,220 @@ class ComponentTests(unittest.TestCase):
         (site / 'leak.pth').write_text('C:/old-machine/site-packages\n')
         with self.assertRaises(ValueError):
             list(components.qwen_files(base, site, [], vs, '3.12.12'))
+
+    def split_archive(self):
+        archive, item = self.archive()
+        body = archive.read_bytes()
+        parts = []
+        for index, start in enumerate(range(0, len(body), 100)):
+            path = self.base / f'part{index}'
+            path.write_bytes(body[start:start + 100])
+            parts.append(dict(archive=path.name, bytes=path.stat().st_size, sha256=store.digest(path)))
+        archive.unlink()
+        return dict(item, parts=parts)
+
+    def test_local_parts_assemble_install_and_reuse(self):
+        item = self.split_archive()
+        cache = self.base / 'downloads'
+        archive = store.obtain(item, self.base, cache)
+        receipt = store.install(self.root, item, archive, False)
+        self.assertTrue(Path(receipt['root'], 'ffmpeg.exe').is_file())
+        # Verified assembled archives can be reused even without transport parts.
+        for part in item['parts']:
+            (self.base / part['archive']).unlink()
+        self.assertEqual(store.obtain(item, self.base, cache), archive)
+
+    def test_corrupt_part_cannot_install_or_replace_existing_archive(self):
+        item = self.split_archive()
+        cache = self.base / 'downloads'
+        cache.mkdir()
+        target = cache / (item['sha256'] + '.zip')
+        target.write_bytes(b'preserve existing cache')
+        (self.base / item['parts'][1]['archive']).write_bytes(b'corrupt')
+        with self.assertRaisesRegex(ValueError, 'size/SHA256'):
+            store.obtain(item, self.base, cache)
+        self.assertEqual(target.read_bytes(), b'preserve existing cache')
+        self.assertFalse((self.root / 'components').exists())
+
+    def test_part_order_and_whole_archive_hash_are_checked(self):
+        item = self.split_archive()
+        item['parts'].reverse()
+        with self.assertRaisesRegex(ValueError, 'Assembled archive'):
+            store.obtain(item, self.base, self.base / 'downloads')
+        self.assertFalse((self.base / 'downloads' / (item['sha256'] + '.zip')).exists())
+
+    def test_invalid_parts_fail_catalog_validation(self):
+        item = self.split_archive()
+        path = self.base / 'catalog.json'
+        invalid = [[], item['parts'] * 2, [dict(item['parts'][0], archive='../escape')],
+                   [dict(item['parts'][0], bytes=2 * 1024**3)],
+                   [dict(item['parts'][0], sha256='')], [dict(item['parts'][0], parts=[])]]
+        for parts in invalid:
+            path.write_text(json.dumps(dict(schema=1, components=[dict(item, parts=parts)])))
+            with self.subTest(parts=parts), self.assertRaises(ValueError):
+                store.catalog(path)
+
+    def test_parts_check_free_space_before_reading_payload(self):
+        item = self.split_archive()
+        with patch.object(store.shutil, 'disk_usage', return_value=SimpleNamespace(free=0)), \
+                patch.object(store, 'obtain_single') as obtain:
+            with self.assertRaisesRegex(ValueError, 'free space'):
+                store.obtain(item, self.base, self.base / 'downloads')
+            obtain.assert_not_called()
+
+    def test_https_parts_reuse_verified_downloads_after_interruption(self):
+        item = self.split_archive()
+        bodies = {p['archive']: (self.base / p['archive']).read_bytes() for p in item['parts']}
+        calls = []
+        fail = [True]
+        def download(url, **kwargs):
+            name = url.rsplit('/', 1)[1]
+            calls.append(name)
+            if name == item['parts'][1]['archive'] and fail[0]:
+                fail[0] = False
+                raise OSError('interrupted')
+            response = io.BytesIO(bodies[name])
+            response.url = url
+            return response
+        cache = self.base / 'downloads'
+        with patch.object(store.urllib.request, 'urlopen', side_effect=download):
+            with self.assertRaisesRegex(OSError, 'interrupted'):
+                store.obtain(item, 'https://example.test/catalog.json', cache)
+            archive = store.obtain(item, 'https://example.test/catalog.json', cache)
+        self.assertEqual(store.digest(archive), item['sha256'])
+        self.assertEqual(calls.count(item['parts'][0]['archive']), 1)
+
+    def test_prepare_copies_bootstrap_splits_payload_and_installs(self):
+        archive, item = self.archive()
+        boot = self.base / ('bootstrap-' + 'a' * 16 + '.zip')
+        boot.write_bytes(b'bootstrap fixture')
+        bootstrap = dict(id='bootstrap', version='local-test', archive=boot.name, bytes=boot.stat().st_size,
+                         expanded_bytes=100, sha256=store.digest(boot))
+        catalog = self.base / 'catalog.json'
+        catalog.write_text(json.dumps(dict(schema=1, bootstrap=bootstrap, components=[item])))
+        output = self.base / 'prepared'
+        components.prepare(SimpleNamespace(catalog=catalog, output=output, part_bytes=100))
+        data, base = store.catalog(output / 'catalog.json')
+        self.assertEqual((output / boot.name).read_bytes(), boot.read_bytes())
+        self.assertTrue(all(p['bytes'] <= 100 for p in data['components'][0]['parts']))
+        assembled = store.obtain(data['components'][0], base, self.base / 'downloads')
+        self.assertEqual(assembled.read_bytes(), archive.read_bytes())
+        for line in (output / 'SHA256SUMS').read_text().splitlines():
+            digest, name = line.split('  ', 1)
+            self.assertEqual(store.digest(output / name), digest)
+        with self.assertRaises(FileExistsError):
+            components.prepare(SimpleNamespace(catalog=catalog, output=output, part_bytes=100))
+
+    def test_prepare_rejects_release_limit_before_creating_output(self):
+        _, item = self.archive()
+        catalog = self.base / 'catalog.json'
+        catalog.write_text(json.dumps(dict(schema=1, components=[item])))
+        output = self.base / 'prepared'
+        with self.assertRaisesRegex(ValueError, 'below 2 GiB'):
+            components.prepare(SimpleNamespace(catalog=catalog, output=output, part_bytes=2 * 1024**3))
+        self.assertFalse(output.exists())
+
+    def candidate(self, files):
+        for name, body in dict(files, **{'mpv.exe': b'candidate player', 'mpv.com': b'launcher'}).items():
+            (self.root / name).write_bytes(body)
+        return self.root
+
+    def test_vs_adaptation_reuses_candidate_ffi_without_changing_sources(self):
+        archive, item = self.archive({'libffi-8.dll': b'snapshot FFI', 'python.exe': b'python'}, 'vs')
+        player = self.candidate({'libffi-8.dll': b'candidate FFI'})
+        output = self.base / 'adapted'
+        output.mkdir()
+        with patch.object(store, 'probe', return_value={'width': 16}) as probe:
+            adapted, path = components.adapt_vs(item, archive, player, output)
+        self.assertEqual(probe.call_count, 1)
+        self.assertNotEqual(adapted['version'], item['version'])
+        self.assertEqual(store.digest(archive), item['sha256'])
+        self.assertEqual((player / 'libffi-8.dll').read_bytes(), b'candidate FFI')
+        self.assertEqual(adapted['metadata']['candidate_mpv_sha256'], store.digest(player / 'mpv.exe'))
+        store.install(player, adapted, path, False)
+        self.assertEqual((player / 'libffi-8.dll').read_bytes(), b'candidate FFI')
+        self.assertEqual((player / 'mpv.exe').read_bytes(), b'candidate player')
+
+    def test_vs_adaptation_rejects_unreviewed_shared_binary(self):
+        archive, item = self.archive({'python.exe': b'snapshot Python'}, 'vs')
+        player = self.candidate({'python.exe': b'candidate Python'})
+        with self.assertRaisesRegex(ValueError, 'Unreviewed'):
+            components.adapt_vs(item, archive, player, self.base)
+        self.assertEqual((player / 'python.exe').read_bytes(), b'candidate Python')
+
+    def test_vs_adaptation_native_failure_produces_no_archive(self):
+        archive, item = self.archive({'libffi-8.dll': b'snapshot FFI'}, 'vs')
+        player = self.candidate({'libffi-8.dll': b'candidate FFI'})
+        output = self.base / 'adapted'
+        output.mkdir()
+        with patch.object(store, 'probe', side_effect=RuntimeError('native failure')):
+            with self.assertRaisesRegex(RuntimeError, 'native failure'):
+                components.adapt_vs(item, archive, player, output)
+        self.assertEqual(list(output.iterdir()), [])
+
+    def test_adapted_catalog_rejects_another_player_before_install(self):
+        _, item = self.archive({'libffi-8.dll': b'candidate FFI'}, 'vs')
+        item['metadata'] = dict(candidate_mpv_sha256='0' * 64)
+        catalog = self.base / 'catalog.json'
+        catalog.write_text(json.dumps(dict(schema=1, components=[item])))
+        self.candidate({})
+        with patch.object(store, 'install') as install:
+            with self.assertRaisesRegex(ValueError, 'candidate player SHA256'):
+                components.deploy(SimpleNamespace(mpv_root=self.root, catalog=catalog, components=['vs']))
+            install.assert_not_called()
+        self.assertFalse((self.root / 'portable_config/state').exists())
+
+    def test_prepare_adapted_vs_catalog_reassembles_without_shipping_oversized_intermediate(self):
+        _, item = self.archive({'libffi-8.dll': b'snapshot FFI', 'python.exe': b'python'}, 'vs')
+        player = self.candidate({'libffi-8.dll': b'candidate FFI'})
+        boot = self.base / ('bootstrap-' + 'a' * 16 + '.zip')
+        boot.write_bytes(b'bootstrap')
+        bootstrap = dict(id='bootstrap', version='local-test', archive=boot.name, bytes=boot.stat().st_size,
+                         expanded_bytes=100, sha256=store.digest(boot))
+        catalog = self.base / 'catalog.json'
+        catalog.write_text(json.dumps(dict(schema=1, bootstrap=bootstrap, components=[item])))
+        output = self.base / 'prepared'
+        with patch.object(store, 'probe', return_value={'width': 16}):
+            components.prepare(SimpleNamespace(catalog=catalog, output=output, part_bytes=100, vs_player=player))
+        data, base = store.catalog(output / 'catalog.json')
+        adapted = data['components'][0]
+        self.assertFalse((output / adapted['archive']).exists())
+        archive = store.obtain(adapted, base, self.base / 'downloads')
+        store.install(player, adapted, archive, False)
+        self.assertEqual((player / 'libffi-8.dll').read_bytes(), b'candidate FFI')
+
+    def test_launcher_conflict_aborts_before_install_and_preserves_user_file(self):
+        _, item = self.archive({'libffi-8.dll': b'FFI'}, 'vs')
+        catalog = self.base / 'catalog.json'
+        catalog.write_text(json.dumps(dict(schema=1, components=[item])))
+        self.candidate({})
+        launcher = self.root / 'mpv-components.cmd'
+        launcher.write_bytes(b'user launcher')
+        with patch.object(store, 'install') as install:
+            with self.assertRaisesRegex(ValueError, 'user file was preserved'):
+                components.deploy(SimpleNamespace(mpv_root=self.root, catalog=catalog, components=['vs']))
+            install.assert_not_called()
+        self.assertEqual(launcher.read_bytes(), b'user launcher')
+        self.assertFalse((self.root / 'portable_config/state').exists())
+
+    def test_vs_configure_creates_relative_launcher_and_preserves_it_after_move(self):
+        store.configure(self.root, [dict(id='vs', root=str(self.root))])
+        launcher = self.root / 'mpv-components.cmd'
+        before = launcher.read_bytes()
+        moved = self.base / 'moved player 中文'
+        self.root.rename(moved)
+        self.assertEqual(store.component_launcher(moved, write=True).read_bytes(), before)
+        self.assertNotIn(str(self.root).encode(), before)
+
+    def test_managed_vs_status_requires_launcher_and_repair_restores_readiness(self):
+        archive, item = self.archive({'libffi-8.dll': b'FFI'}, 'vs')
+        store.install(self.root, item, archive, False)
+        args = SimpleNamespace(mpv_root=self.root, components=['vs'], hashes=False, report=None)
+        with patch.object(store, 'probe', return_value={'width': 16}) as probe:
+            self.assertEqual(components.status(args), 1)
+            probe.assert_not_called()
+            store.component_launcher(self.root, write=True)
+            self.assertEqual(components.status(args), 0)
 
 
 if __name__ == '__main__':

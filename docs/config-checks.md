@@ -73,7 +73,7 @@ python tools/test_release.py
 
 干净且已提交的源码可去掉 `--allow-dirty`。`stage`、`check`、`archive`、`check-archive`、`publish` 的完整参数见各自 `--help`；编译脚本 `tools/build-release-msys2.sh` 只在 CI 的 UCRT64 环境执行，不在日常播放器目录安装编译器。`publish` 是实际远端写入命令，日常自检不调用。
 
-公开候选仍是播放器及配置，`release/manifest.json` 的 `components` 清单尚未填入公开分包。下方工具已支持本机快照的固定清单、安装和迁移；本机验收不代表候选包或干净机器通过，当前不能称为公开离线完整版。
+公开候选仍是播放器及配置，`release/manifest.json` 的 `components` 清单尚未填入公开分包。下方工具已支持本机快照的固定清单、安装和迁移；候选与组件整合的本机实测见下方日期记录，干净机器尚未验收，当前不能称为公开离线完整版。
 
 转正式版前，使用最终下载的候选包和选定组件完成启动/媒体/菜单/切片/重置、每个提供的 VS 预设产帧及 shader 渲染、Whisper/Qwen 真实字幕/缓存/取消、路径迁移和干净机器验收。把硬件、版本、组件和未覆盖项记入 Release 说明，保留原始证据；之后在 GitHub 编辑该预发布，取消 Pre-release 并设置 Latest。流程不自动做此晋级。
 
@@ -92,11 +92,29 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/components.ps1 -Action
 python tools/components.py status --mpv-root X:/moved-player --hashes
 # 从已安装且可运行的环境导出；输出目录须不存在，运行时与模型源保持原位
 python tools/components.py export --output X:/offline-components
+# 把本机离线快照整理成适合 Release 的分卷；输出目录须不存在
+python tools/components.py prepare --catalog X:/offline-components/catalog.json --output X:/transport-components
+# 以选定候选播放器适配已核对的 VS 共享依赖，并在暂存区执行原生探针
+python tools/components.py prepare --catalog X:/offline-components/catalog.json --output X:/candidate-components --vs-player X:/candidate/MPV
 ```
 
 导出读取本机 `local.conf` 的后端/模型路径，以及配置的或 PATH 中的 FFmpeg/FFprobe，生成包含安装器、引导 Python 和四个分包的清单；私人配置、token、用户字幕缓存和 TRT 引擎缓存不在导出范围。Qwen 从原 venv 或已迁移环境取依赖，另配完整 Python、相对 `._pth` 和本地 VC++ 库；迁移包不保留原 venv 的绝对 Python 路径。导出可能占用数十 GB，须遵守各组件原许可；此入口不会自动发布资产。
 
+`prepare` 验证原清单及整包哈希，将大包按默认 1900 MiB 分卷，保留单卷 Python 引导包，并附带当前安装器、`catalog.json` 和全部文件的 `SHA256SUMS`。可用 `--part-bytes` 调整卷大小，每卷必须小于 2 GiB，符合 [GitHub Release 单附件限制](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases)。此命令只准备传输文件，不上传、不更新公开发行清单，也不代表来源许可或候选兼容性已验收；准备分卷不需要重新压缩模型。分发仅取校验表列出的文件及 `SHA256SUMS`，不打包安装测试生成的 `__pycache__` 或日志。
+
+分卷安装须使用新包附带的安装器。保持目录结构，选择其中的 `catalog.json` 即可；HTTPS 清单也使用相同卷索引。工具先核对每卷大小与 SHA256，按清单顺序合并，再验证整包哈希，最后进入原有逐文件安装和原生探针；缺卷、坏卷、乱序、空间不足均失败。网络中断保留已校验的下载卷，重试可复用；未完成的合并文件保留作诊断，不会登记为已安装。除展开空间外，本地分卷需额外的整包缓存空间，HTTPS 安装还需存储下载卷；原始单包清单继续可用。
+
+`--vs-player` 目前仅适配已核对的 `libffi-8.dll` 同名冲突：在独立暂存区验证原始 VS 包，改用指定候选自带的 DLL，通过 Python/ctypes/VS 基础帧探针后重新生成版本、整包与分卷哈希；元数据绑定候选 `mpv.exe` 及新旧 DLL 的 SHA256。其他共享文件发生内容冲突时中止，不猜测 ABI 兼容性。源快照与候选播放器均不改写；这一步额外需要 VS 展开与重打包空间，仍须对最终安装目录执行 GPU 预设与字幕实际验收。
+
 安装按整包和逐文件 SHA256 验证，并在暂存区与最终目录执行原生探针。VS 只允许运行时目录和明确的根目录文件；Whisper/Qwen/媒体工具放在播放器的 `components/<组件>/<固定版本>/`。目标无需已有 Python：引导器从同一可信清单取固定哈希的小型 Python，此时检查也需提供清单。安装 Whisper/Qwen 自动补齐 FFmpeg/FFprobe；没有清单不安装组件，不猜测最新版或自动下载大模型。
+
+安装 VS 或执行迁移修复时，会在播放器根目录生成 `mpv-components.cmd`。r2 候选需从该入口启动，以便在任何工作目录都按播放器位置设置 `VSSCRIPT_PATH` 并动态启用 VS；环境只传给本次播放器进程及其子进程，不写系统设置。启动器使用相对自身的路径，整体移动后仍可定位 DLL；已有不同内容的同名启动器会中止安装并保留用户文件，缺失时可运行迁移修复重新生成。
+
+在选定的独立播放器配置目录中，可从安装后的启动器验证实际 GPU 入口；完整序列会初始化重型预设，冷缓存可能长时间编译：
+
+```powershell
+python tools/test_gpu_ux.py --case playback --paused --source-width 640 --cold-shader-cache --timeout 1800 --launcher ../mpv-components.cmd
+```
 
 同内容文件复用，不同内容文件拒绝覆盖；这也可能阻止与发行播放器自带 DLL 冲突的 VS 快照安装，需先选择匹配运行时。单个组件提交失败只回滚该组件本轮新建文件，已成功安装的其他组件保留，失败暂存留作诊断。安装记录位于 `state/components/`，路径只写忽略的 `local.conf`，原配置先备份，私人接口设置保留。整体移动播放器目录后运行“修复迁移路径”，按记录重新定位并探测组件。不要在安装期间启动播放器；中断遗留的锁应先核查对应进程和暂存，再处理。
 
@@ -105,6 +123,14 @@ python tools/components.py export --output X:/offline-components
 2026-10-19 本机组件验收：RTX 4070 Laptop 8GB / 驱动 616.92，独立播放器先在没有 Python 的目录中通过引导器安装 VS，再安装媒体工具、Whisper 和 Qwen；离线分包约 19.3 GiB，展开约 24.4 GiB。整套播放器移到含中文和空格的新路径后，修复路径并逐文件复核 45,954 个负载文件的哈希通过，Qwen 确认使用包内独立 Python 3.12.12 / Torch 2.8.0+cu128。最终 PowerShell 检查入口四组件均 READY。
 
 迁移目录中 Bilateral / RIFE TRT 各输出 3 张有效 PNG；Whisper 分段识别、取消、下一文件、缓存复用与 Qwen 菜单切换识别均通过，另补测显式离线模型目录。三组字幕回归均正常退出、无遗留后端进程，截图已目视检查；两种 VS 的采样输入为 640×360/30fps 合成图，字幕使用已知英文合成语音，不作为真实课程准确率或稳定性能结论。摘要为 `cache/component-audit/migration.json`、`whisper-model-dir.json`、`moved-status.json`，原始报告/日志/截图已复制到其 `evidence/` 子目录。15 项组件离线回归、11 项 Qwen 适配回归通过；CI 接入尚待远端执行。
+
+2026-10-21 候选整合实测：同机 RTX 4070 Laptop 8GB / 驱动 616.92，以缓存公开 r2 ZIP 的原生文件和配置基线 `b3f13be` 建立含中文、空格路径的独立目录。VS 仅将 `libffi-8.dll` 适配为候选版本，原快照保留；14 个负载附件最大 1900 MiB，最终交付校验表的 21 个文件全部通过。无初始 Python 的引导安装、四组件探针、45,954 个负载文件 SHA256 通过；候选的 316 个原生文件仍与公开 ZIP 一致。
+
+该目录完成 Bilateral/RIFE 各 3 张有效帧、105 项菜单断言、Whisper 分段识别与 Qwen 菜单切换识别；两个后端各完成两次识别与两次缓存复用，覆盖取消、切片和正常退出。完整 RTX GPU 冷 shader 缓存序列通过 38 步及 18 张有效画面，覆盖全部 RTX 菜单预设、暂停跳转、对比、重置与下一文件；清除父进程的 `VSSCRIPT_PATH` 后，经 `mpv-components.cmd` 从配置工作目录复跑同序列也通过。两次 GPU 退出码均为 0，无错误/致命日志，重型预设与字幕截图已目视检查。启动器另测相对媒体路径、中文/空格/与号参数、GUI 默认、失败退出，以及缺失后的路径修复和私人配置保留。
+
+上述 GPU 输入为 640×360/30fps 合成图，字幕为已知英文合成语音；结果不代表真实课程准确率、4K 性能、DML/HDR、其他硬件或干净机器通过。31 项组件回归、20 项发行回归通过，另 1 项发行回归跳过；Actions 尚未远端执行。证据位于忽略的 `cache/component-transport-20261021/`，整合摘要为 `compatible-report.json`，GPU 与真实启动器报告为 `gpu-sequence.json`、`launcher-gpu-sequence.json`。
+
+公开分发仍有来源材料缺口：媒体快照仅含 FFmpeg/FFprobe，未附许可/源码材料；VS、Whisper、Qwen 的二进制、模型和依赖尚缺完整上游来源记录。清点见同目录 `contents-inventory.json`。兼容适配和分卷校验不构成再分发许可确认，补齐材料及干净机器验收后再接入公开清单。
 
 ## 菜单与设置保留回归
 

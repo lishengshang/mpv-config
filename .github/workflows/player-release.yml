@@ -36,6 +36,7 @@ jobs:
           python tools/check_config.py
           python tools/test_check_config.py ReferenceChecks WiringChecks
           python tools/test_qwen_asr.py
+          python tools/test_components.py
           python tools/test_gpu_probe.py
           python tools/test_verify_gpu.py
       - name: Resolve official stable tag and exact source commits

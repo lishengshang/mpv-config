@@ -80,17 +80,39 @@ def catalog(value):
         if item.get('id') not in IDS or item['id'] in seen or not re.fullmatch(r'[A-Za-z0-9_-][A-Za-z0-9._-]{0,79}', item.get('version', '')):
             raise ValueError('Invalid/duplicate component identity')
         seen.add(item['id'])
-        relative(item['archive'])
-        if not re.fullmatch('[a-f0-9]{64}', item.get('sha256', '')):
-            raise ValueError('Missing immutable archive SHA256')
-        if not isinstance(item.get('bytes'), int) or not 0 < item['bytes'] <= 96 * 1024**3:
-            raise ValueError('Invalid archive size')
+        validate_archive(item)
         if not isinstance(item.get('expanded_bytes'), int) or not 0 < item['expanded_bytes'] <= 128 * 1024**3:
             raise ValueError('Invalid expanded size')
     return result, base
 
 
-def obtain(item, base, download_root):
+def validate_archive(item):
+    relative(item['archive'])
+    if not re.fullmatch('[a-f0-9]{64}', item.get('sha256', '')):
+        raise ValueError('Missing immutable archive SHA256')
+    if type(item.get('bytes')) is not int or not 0 < item['bytes'] <= 96 * 1024**3:
+        raise ValueError('Invalid archive size')
+    if 'parts' not in item:
+        return
+    parts = item['parts']
+    if not isinstance(parts, list) or not 1 <= len(parts) <= 1000:
+        raise ValueError('Invalid archive parts')
+    names, total = {item['archive'].casefold()}, 0
+    for part in parts:
+        relative(part['archive'])
+        if part['archive'].casefold() in names or 'parts' in part:
+            raise ValueError('Duplicate/nested archive part')
+        names.add(part['archive'].casefold())
+        if type(part.get('bytes')) is not int or not 0 < part['bytes'] < 2 * 1024**3:
+            raise ValueError('Invalid archive part size')
+        if not re.fullmatch('[a-f0-9]{64}', part.get('sha256', '')):
+            raise ValueError('Missing archive part SHA256')
+        total += part['bytes']
+    if total != item['bytes']:
+        raise ValueError('Archive parts size mismatch')
+
+
+def obtain_single(item, base, download_root):
     if isinstance(base, Path):
         path = inside(base, item['archive'])
         if path.stat().st_size != item['bytes'] or digest(path) != item['sha256']:
@@ -116,6 +138,37 @@ def obtain(item, base, download_root):
             output.write(block)
     if temporary.stat().st_size != item['bytes'] or digest(temporary) != item['sha256']:
         raise ValueError('Downloaded component hash mismatch; partial file retained')
+    os.replace(temporary, target)
+    return target
+
+
+def obtain(item, base, download_root):
+    validate_archive(item)
+    if 'parts' not in item:
+        return obtain_single(item, base, download_root)
+    root = Path(download_root).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    target = inside(root, item['sha256'] + '.zip')
+    if target.is_file() and target.stat().st_size == item['bytes'] and digest(target) == item['sha256']:
+        return target
+    required = item['bytes'] * (1 if isinstance(base, Path) else 2) + 512 * 1024**2
+    if shutil.disk_usage(root).free < required:
+        raise ValueError('Insufficient free space for archive parts and assembly')
+    temporary = target.with_suffix('.' + uuid.uuid4().hex + '.part')
+    h, count = hashlib.sha256(), 0
+    with temporary.open('xb') as output:
+        for index, part in enumerate(item['parts'], 1):
+            path = obtain_single(dict(part, id=item['id']), base, root)
+            print(f"{item['id']}: verified part {index}/{len(item['parts'])}", flush=True)
+            with path.open('rb') as source:
+                while block := source.read(1024 * 1024):
+                    if count + len(block) > item['bytes']:
+                        raise ValueError('Archive parts exceeded pinned size')
+                    output.write(block)
+                    h.update(block)
+                    count += len(block)
+    if count != item['bytes'] or h.hexdigest() != item['sha256']:
+        raise ValueError('Assembled archive size/SHA256 mismatch; partial file retained')
     os.replace(temporary, target)
     return target
 
@@ -327,8 +380,27 @@ def install(root, item, archive, run_probe=True):
     return receipt
 
 
+def component_launcher(root, write=False):
+    path = inside(root, 'mpv-components.cmd')
+    content = (b'@echo off\nsetlocal\n'
+               b'set "VSSCRIPT_PATH=%~dp0VSScript.dll"\n'
+               b'if not exist "%VSSCRIPT_PATH%" (\n'
+               b'  echo VS runtime missing. Run portable_config\\tools\\components.cmd first. 1>&2\n'
+               b'  exit /b 2\n)\n'
+               b'"%~dp0mpv.exe" --player-operation-mode=pseudo-gui %*\nexit /b %ERRORLEVEL%\n')
+    if path.exists():
+        if not path.is_file() or path.read_bytes() != content:
+            raise ValueError('Existing component launcher differs; user file was preserved: ' + str(path))
+    elif write:
+        with path.open('xb') as output:
+            output.write(content)
+    return path
+
+
 def configure(root, receipts):
     root = Path(root).resolve()
+    if any(item['id'] == 'vs' for item in receipts):
+        component_launcher(root, write=True)
     local = inside(root, 'portable_config/local.conf')
     text = local.read_text(encoding='utf-8-sig') if local.is_file() else ''
     values = {}

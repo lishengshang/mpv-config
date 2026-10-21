@@ -7,6 +7,7 @@ All fixtures/reports stay in ignored cache. No runtime or original preset edits.
 import argparse
 from datetime import datetime
 import json
+import os
 from pathlib import Path
 import shutil
 import struct
@@ -92,6 +93,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--case', choices=['playback', 'no-vs', 'failure'], default='playback')
     parser.add_argument('--paused', action='store_true', help='Switch filters while playback is paused')
+    parser.add_argument('--launcher', type=Path, help='Use the installed component CMD launcher from the test working directory')
     parser.add_argument('--focused', action='store_true', help='RIFE/DRBA/ArtCNN shape regression without shader compilation')
     parser.add_argument('--source-width', type=int, choices=[640, 1280], default=1280,
                         help='640 exercises 2x shader rendering and may build new TRT engines')
@@ -100,6 +102,8 @@ def main():
     cache_options.add_argument('--shader-cache-dir', type=Path, help='Reuse an explicit cache for a warm follow-up run')
     parser.add_argument('--timeout', type=int, default=960, help='Overall native process timeout in seconds')
     options = parser.parse_args()
+    if options.launcher and (options.case != 'playback' or not options.launcher.is_file()):
+        parser.error('--launcher requires playback and an existing CMD launcher')
     if options.focused and options.case != 'playback':
         parser.error('--focused requires --case playback')
     if options.timeout < 60:
@@ -152,10 +156,20 @@ def main():
             f'av://lavfi:testsrc2=size={options.source_width}x{options.source_width * 9 // 16}:rate=30,format=yuv420p']
     if options.paused:
         args.insert(1, '--pause=yes')
+    if options.launcher:
+        forwarded = [str(options.launcher.resolve()), *args[1:]]
+        if any(any(c in value for c in '"%\r\n') for value in forwarded):
+            parser.error('CMD launcher test paths cannot contain quotes, percent signs or newlines')
+        quoted = [subprocess.list2cmdline([value]) for value in forwarded]
+        line = ' '.join(value if value.startswith('"') else '"' + value + '"' for value in quoted)
+        # Pass CMD its raw /c line; list2cmdline on the whole line would insert
+        # backslash-escaped quotes, which CMD does not treat as quoting.
+        args = subprocess.list2cmdline([os.environ.get('COMSPEC', 'cmd.exe'), '/d', '/v:off', '/s', '/c']) + ' "' + line + '"'
     timed_out = False
     with (folder / 'console.log').open('wb') as console:
         # --no-config makes ~~ paths relative; run inside the selected fixture.
-        proc = subprocess.Popen(args, stdout=console, stderr=subprocess.STDOUT, cwd=config)
+        proc = subprocess.Popen(args, stdout=console, stderr=subprocess.STDOUT, cwd=config,
+                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0) if options.launcher else 0)
         try:
             code = proc.wait(timeout=options.timeout)
         except subprocess.TimeoutExpired:
@@ -190,6 +204,7 @@ def main():
     if options.case == 'playback' and not options.focused:
         passed = passed and all('ArtCNN ' + model + ' (Conv2D)' in content for model in ['C4F16', 'C4F32'])
     report = dict(case=options.case, paused=options.paused, focused=options.focused, source_width=options.source_width,
+                  launcher=str(options.launcher.resolve()) if options.launcher else None,
                   cold_shader_cache=options.cold_shader_cache, shader_cache=str(shader_cache),
                   passed=passed, exit_code=code, timed_out=timed_out,
                   log=str(log), frames=frames, command=args)
