@@ -1,0 +1,38 @@
+name: Weekly upstream pull request
+
+on:
+  schedule:
+    # Monday 10:17, Asia/Shanghai (GitHub schedules use UTC).
+    - cron: '17 2 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  upstream:
+    if: github.repository == 'lishengshang/mpv-config'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: dev
+          fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Verify upstream sync failure handling
+        run: python tools/tests/test_upstream_sync.py
+      - name: Fetch upstream and open or update a pull request
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+        run: python tools/maintenance/upstream_sync.py --publish
