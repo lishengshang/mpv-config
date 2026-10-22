@@ -38,7 +38,7 @@ def main():
                         'sine=frequency=440:sample_rate=48000', '-t', '20', '-c:v', 'libx264',
                         '-preset', 'ultrafast', '-c:a', 'aac', str(media)], check=True, timeout=60)
         source = str(media)
-    scripts = ['scripts/uosc', 'scripts/menu-ui.lua', 'scripts/dyn_menu.lua', 'scripts/inputevent.lua',
+    scripts = ['scripts/uosc', 'scripts/menu-ui.lua', 'scripts/panel-manager.lua', 'scripts/dyn_menu.lua', 'scripts/inputevent.lua',
                'scripts/gpu-effects.lua', 'scripts/quality-menu.lua', 'tools/tests/test_menu_ui_playback.lua']
     if options.full:
         scripts = ['tools/tests/test_menu_ui_playback.lua']

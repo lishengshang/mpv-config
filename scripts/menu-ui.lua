@@ -1,5 +1,5 @@
 -- Local menu integration. Uses uosc's public overwrite-binding/open-menu API;
--- upstream uosc and dyn_menu remain unmodified. Labels live in input.conf.
+-- Labels live in input.conf; panel-manager coordinates with other renderers.
 local utils = require 'mp.utils'
 local name, menu_type = mp.get_script_name(), 'menu-ui'
 local roots = {'打开与文件', '播放', '画面', '画质增强', '音频', '字幕', '截图与导出', '窗口', '工具与高级', '退出程序'}
@@ -320,11 +320,15 @@ refresh = function()
         mp.commandv('script-message-to', 'uosc', 'update-menu', utils.format_json(data()))
     end
 end
-local function open(mode, submenu)
+local function open_coordinated(mode, submenu)
     view = mode or 'main'
     if submenu and submenu ~= '' then
         mp.commandv('script-message-to', 'uosc', 'open-menu', utils.format_json(data()), submenu)
     else mp.commandv('script-message-to', 'uosc', 'open-menu', utils.format_json(data())) end
+end
+local function open(mode, submenu)
+    if get('user-data/uosc/menu/type') then open_coordinated(mode, submenu)
+    else mp.commandv('script-message-to', 'panel_manager', 'open', 'menu', mode or 'main', submenu or '') end
 end
 local function toggle()
     if get('user-data/uosc/menu/type') == menu_type then mp.commandv('script-message-to', 'uosc', 'close-menu', menu_type)
@@ -344,6 +348,7 @@ mp.register_script_message('event', function(json)
     changed()
 end)
 mp.register_script_message('open', function(submenu) open('main', submenu) end)
+mp.register_script_message('open-coordinated', open_coordinated)
 mp.register_script_message('toggle', toggle)
 mp.register_script_message('secondary', function() open('secondary') end)
 mp.register_script_message('tracks', function() open('tracks') end)

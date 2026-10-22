@@ -142,6 +142,8 @@ function Menu:init(data, callback, opts)
 	if utils.shared_script_property_set then
 		utils.shared_script_property_set('uosc-menu-type', self.type or 'undefined')
 	end
+	-- Local panel coordination uses the open time when notifications are batched.
+	mp.set_property_number('user-data/uosc/menu/opened-at', mp.get_time())
 	mp.set_property_native('user-data/uosc/menu/type', self.type or 'undefined')
 	self:update(data)
 
