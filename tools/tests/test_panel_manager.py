@@ -115,6 +115,18 @@ def main():
                             '/search' in b.get('cmd', '') or '/list-search' in b.get('cmd', ''))
                        for b in get('input-bindings', []))
 
+    def menu_text_pixels():
+        # Unselected root labels only: exclude submenu arrows and selected row.
+        # The translucent background in this fixed fixture has no white pixels.
+        result = subprocess.run([str(ffmpeg), '-hide_banner', '-loglevel', 'error',
+                                 '-i', str(folder / 'menu.png'),
+                                 '-vf', 'crop=200:430:490:190', '-pix_fmt', 'rgb24',
+                                 '-f', 'rawvideo', '-'], capture_output=True, check=True, timeout=10)
+        if len(result.stdout) != 200 * 430 * 3:
+            raise AssertionError('invalid menu crop')
+        pixels = zip(result.stdout[::3], result.stdout[1::3], result.stdout[2::3])
+        return sum(min(rgb) >= 170 and max(rgb) - min(rgb) < 50 for rgb in pixels)
+
     with (folder / 'console.log').open('wb') as console:
         try:
             process = subprocess.Popen(command, cwd=ROOT, stdout=console, stderr=subprocess.STDOUT,
@@ -207,6 +219,11 @@ def main():
             key('F4')
             check('F4 switches to main menu', lambda: panels() == ['menu'])
             shot('menu')
+            text_pixels = menu_text_pixels()
+            report['menu_text_pixels'] = text_pixels
+            if text_pixels < 100:
+                raise AssertionError(('missing menu root text', text_pixels))
+            report['checks'].append('menu text rendered after stats search and console completion')
             open_panel('history')
             check('uosc releases keys', lambda: no_hidden_keys({'uosc'}))
             open_panel('bookmarks')
