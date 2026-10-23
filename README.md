@@ -50,7 +50,7 @@ PS：自行编辑文本时使用 UTF-8、LF；脚本选项的注释单独占行�
 
 全局选项见 [mpv.conf](mpv.conf)，配置组见 [profiles.conf](profiles.conf)，脚本参数位于 [script-opts/](script-opts/)，着色器位于 [shaders/](shaders/)。[archive/](archive/) 为历史归档，不是默认启用区。
 
-本仓库独立维护，按需同步配置上游，不自动覆盖本地定制。本地 `upstream` 指向 `https://github.com/dyphire/mpv-config.git`；新克隆的副本需自行添加该远端。同步前先备份并确认工作区状态，使用 `git fetch upstream` 获取更新，在单独分支比较、合并并验证后再纳入日常配置。菜单内的脚本与着色器更新和仓库上游同步是两项独立操作。
+本仓库独立维护，不自动覆盖本地定制。GitHub 每周检查配置上游，有更新建立待人工审查的 PR，无更新不改分支或文件，见 [上游定期检查](docs/config-checks.md#上游定期检查)。本地 `upstream` 指向 `https://github.com/dyphire/mpv-config.git`；新克隆的副本需自行添加该远端。手动同步前先备份并确认工作区状态，使用 `git fetch upstream` 获取更新，在单独分支比较、合并并验证后再纳入日常配置。菜单内的脚本与着色器更新和仓库上游同步是两项独立操作。
 
 开发约束见 [AGENTS.md](AGENTS.md)，接手在途工作时再核对 [PROJECT_STATE.md](PROJECT_STATE.md)。
 

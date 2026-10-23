@@ -38,6 +38,26 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/check-config.ps1 -Mpv 
 
 整理后直接执行 Python、Lua 或构建脚本的命令使用新子目录，本文及各功能说明已同步。播放器脚本和离线组件安装包也使用相同布局；复制或更新配置时保留整个 `tools/`，避免只复制顶层入口导致缺依赖。测试不会在日常启动时自动遍历执行。兼容边界与各操作参数见本页及对应功能说明。
 
+## 上游定期检查
+
+GitHub Actions 的 `Weekly upstream pull request` 每周一北京时间 10:17 检查 `dyphire/mpv-config:master`，与本仓库 `dev` 比较；定时运行可能有延迟，也可在 Actions 页面手动运行。工作流合并到默认分支 `dev` 后才会启用定时检查。
+
+- 无更新：仅 fetch 并写运行摘要，不创建提交、远端分支、PR 或 Issue。
+- 有更新：将原始上游提交推到 `codex/upstream-sync`，建立或继续更新同一个 PR；不合并到 `dev`，冲突由维护者处理。
+- 手工修改同步分支或上游改写历史时：停止更新并报错，保留人工处理。主动关闭且未合并的同一上游版本不会每周重建 PR。
+- 审查配置、本地定制和播放行为后，使用 **Create a merge commit** 手动合并，保留上游祖先关系；Squash/Rebase 会导致后续检查重复识别旧提交。
+
+仓库 Settings → Actions → General → Workflow permissions 需要允许 GitHub Actions 创建 PR；默认权限仍可保持只读，由本工作流单独申请 `contents: write` 和 `pull-requests: write`。使用默认 `GITHUB_TOKEN` 创建的 PR，检查可能需要在 PR 页面批准运行。若上游开始修改 `.github/workflows/`，默认 token 可能无权推送；此时运行会失败，需配置仅限本仓库、具有 Contents / Pull requests / Workflows 写权限的 `UPSTREAM_SYNC_TOKEN` secret 后重试。不把 token 写进配置或 Git。
+
+本地预览只获取引用并显示结果，不推送、不创建 PR：
+
+```powershell
+..\python.exe tools/maintenance/upstream_sync.py
+..\python.exe tools/tests/test_upstream_sync.py
+```
+
+`--publish` 才会推送同步分支并调用 GitHub API，需要 Git 推送权限与已认证的 `gh`。脚本不切换当前分支、不修改工作区或创建合并提交；网络、推送、API 或历史检查失败均以非零退出码报告。
+
 ## 检查范围
 
 | 项目 | 能检查 | 边界 |
