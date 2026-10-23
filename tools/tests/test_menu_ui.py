@@ -49,6 +49,7 @@ def main():
             f'--config-dir={ROOT}', '--load-scripts=' + ('yes' if options.full else 'no'),
             *(f'--script={ROOT / path}' for path in scripts), f'--input-conf={options.input_conf.resolve()}',
             '--vo=gpu-next', '--gpu-api=d3d11', '--ao=null', '--hwdec=no', '--osc=no', '--idle=yes',
+            '--input-cursor=no',  # Isolate keyboard navigation from physical mouse movement.
             '--pause=yes', '--input-ipc-server=', '--resume-playback=no', '--save-position-on-quit=no', '--geometry=1280x720',
             '--speed=1', '--mute=no', '--secondary-sub-scale=1', '--video-aspect-override=no', '--loop-file=no',
             '--term-status-msg=', f'--osd-fonts-dir={ROOT / "fonts"}', '--osd-font=Noto Sans Mono CJK SC',
