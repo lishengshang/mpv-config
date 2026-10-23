@@ -50,8 +50,19 @@ function M.new(host, refresh)
         local menu = host.get_property_native('user-data/uosc/menu/type')
         local label = active and not menu and ('AI 字幕 · ' .. self.summary()) or ''
         label = label:gsub('\\', '\\e'):gsub('{', '\\{'):gsub('}', '\\}')
-        overlay.res_x, overlay.res_y, overlay.z = 1280, 720, 1
-        overlay.data = label ~= '' and ('{\\an7\\pos(18,18)\\fs20\\bord1.5\\shad0\\1c&HFFFFFF&\\3c&H000000&}' .. label) or ''
+        -- Keep the task below native OSD notices and uosc's title bar. Overlays
+        -- do not participate in libass collision handling across OSD sources.
+        local dimensions = host.get_property_native('osd-dimensions') or {}
+        local margins = host.get_property_native('user-data/osc/margins') or {}
+        local width = dimensions.w and dimensions.h and dimensions.h > 0 and
+            (720 * dimensions.w / dimensions.h) or 1280
+        local top = math.max(18, (margins.t or 0) * 720,
+            host.get_property_native('osd-margin-y') or 0)
+        local notice_height = (host.get_property_native('osd-font-size') or 24) * 2.8
+        overlay.res_x, overlay.res_y, overlay.z = width, 720, 1
+        overlay.data = label ~= '' and (string.format(
+            '{\\an9\\pos(%.2f,%.2f)\\fs20\\bord1.5\\shad0\\1c&HFFFFFF&\\3c&H000000&}',
+            width - 18, top + notice_height) .. label) or ''
         if overlay.data == '' then overlay:remove() else overlay:update() end
         host.set_property_native('user-data/ai-subtitles/feedback', {active = active, text = self.summary(),
             phase = task(self.view) or 'idle', elapsed = active and math.floor(host.get_time() - self.started) or 0})

@@ -1,10 +1,11 @@
 package.path = mp.command_native({'expand-path', '~~/script-modules/?.lua'}) .. ';' .. package.path
 local module = require 'ai-subtitle-ui'
 local checks, clock, notices, refreshes, timers, feedback, data = 0, 0, 0, 0, {}, nil, ''
+local properties = {}
 local function check(ok, why) assert(ok, why); checks = checks + 1 end
 local fake = {
     get_time = function() return clock end,
-    get_property_native = function() return nil end,
+    get_property_native = function(name) return properties[name] end,
     set_property_native = function(_, value) feedback = value end,
     osd_message = function() notices = notices + 1 end,
     create_osd_overlay = function()
@@ -38,6 +39,20 @@ local function suite()
     menu = view({recognizing=true})
     check(#menu.items == 4 and row(menu,'cancel') and not row(menu,'generate'), 'busy view has one cancel and no duplicate generation')
     check(data:find('本地识别') and feedback.active, 'immediate dedicated overlay and public feedback')
+    check(data:find('\\an9', 1, true) and data:find('\\pos(1262.00,85.20)', 1, true),
+        'task indicator reserves two native notice lines instead of drawing over the toast')
+    properties['osd-dimensions'] = {w=800,h=600}
+    properties['user-data/osc/margins'] = {t=0.1}
+    ui.redraw()
+    check(data:find('\\pos(942.00,139.20)', 1, true), 'task follows aspect ratio and visible title margin')
+    properties['osd-margin-y'], properties['osd-font-size'] = 100, 40
+    ui.redraw()
+    check(data:find('\\pos(942.00,212.00)', 1, true), 'task also reserves enlarged native OSD margins and font')
+    properties['user-data/uosc/menu/type'] = 'ai-subtitle-manager'
+    ui.redraw()
+    check(data == '' and feedback.active, 'menu hides duplicate indicator without hiding task state')
+    properties = {}
+    ui.redraw()
     clock = 12
     timers[#timers].callback()
     check(data:find('00:12') and not data:find('%%'), 'visible beyond old nine-second toast without invented percentage')

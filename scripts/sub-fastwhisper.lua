@@ -291,7 +291,12 @@ local function refresh_ui_menu()
     end
 end
 ui = subtitle_ui.new(mp, refresh_ui_menu)
-if mp.observe_property then mp.observe_property('user-data/uosc/menu/type', 'native', function() ui.redraw() end) end
+if mp.observe_property then
+    for _, property in ipairs({'user-data/uosc/menu/type', 'user-data/osc/margins',
+        'osd-dimensions', 'osd-margin-y', 'osd-font-size'}) do
+        mp.observe_property(property, 'native', function() ui.redraw() end)
+    end
+end
 
 local function publish_status(translation_status)
     local entry = current_entry()

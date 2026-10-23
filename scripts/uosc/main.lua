@@ -517,7 +517,11 @@ function update_margins()
 		bottom = (display.height - timeline.ay) / display.height
 	end
 
-	if causes_margin(top_bar) then top = top_bar.title_by / display.height end
+	-- Local: flashed/hovered titles also cover native notices; reserve their
+	-- rendered height until they fade, not only when permanently pinned.
+	if top_bar and top_bar.enabled and top_bar:get_visibility() > 0 then
+		top = top_bar.title_by / display.height
+	end
 
 	if causes_margin(volume) then
 		if options.volume == 'left' then
