@@ -12,13 +12,13 @@ local function check(value, reason)
 end
 local function path(name) return utils.join_path(opts.root, name) end
 local function boot(media, overrides)
-    state = {path = media, aid = 1, ['track-list'] = {}, ['cache'] = 'yes', duration = 4}
+    state = {path = media, aid = 1, ['track-list'] = {}, ['cache'] = 'yes', duration = 4, errors = {}}
     events, hooks, handlers, jobs, commands, aborted = {}, {}, {}, {}, {}, {}
     timers, clock = {}, 0
     settings = {output_path = path('results'), fast_whisper_path = 'fake-whisper',
         model = 'large-v3-turbo', device = 'cuda', compute_type = 'float16', api_key = '', segment_silence = false}
     for key, value in pairs(overrides or {}) do settings[key] = value end
-    fake = {msg = {info = function() end, error = function() end, warn = function() end,
+    fake = {msg = {info = function() end, error = function(message) state.errors[#state.errors + 1] = message end, warn = function() end,
         debug = function() end, verbose = function() end}}
     function fake.get_property(key, default)
         if key == 'filename/no-ext' then local _, name = utils.split_path(state.path); return name:gsub('%.%w+$', '') end
@@ -167,6 +167,9 @@ local function suite()
     handlers['sub-fastwhisper']()
     check(#jobs == 1 and output(jobs[1]) ~= utils.split_path(completed), 'same name in different folder misses cache')
     local late = jobs[1].callback
+    -- mpv can stop playback-owned subprocesses before the script's unload hook.
+    if jobs[1].spec.playback_only ~= false then late(false, {status = -2, stderr = ''}) end
+    check(#state.errors == 0, 'file switch must not report an engine-aborted job as recognition failure')
     hooks.on_unload()
     state.path = a
     events['file-loaded']()

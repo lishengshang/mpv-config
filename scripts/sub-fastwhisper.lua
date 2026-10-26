@@ -671,7 +671,7 @@ local function call_gpt_api(subtitles, callback, batch)
     end
     msg.info('AI subtitle ' .. (batch.stage == 'calibration' and 'calibration' or 'translation') .. ' in progress')
     local signal, token = nil, generation
-    signal = mp.command_native_async({name = 'subprocess', capture_stdout = true, capture_stderr = true,
+    signal = mp.command_native_async({name = 'subprocess', playback_only = false, capture_stdout = true, capture_stderr = true,
         args = {'curl', '-sS', '--fail-with-body', '--connect-timeout', '10', '--max-time', tostring(o.api_timeout),
             '--header', '@' .. auth, '--data-binary', '@' .. body, '--dump-header', headers,
             '--write-out', '\nMPV_HTTP_STATUS:%{http_code}', o.api_url}}, function(ok, result)
@@ -917,7 +917,9 @@ local function fastwhisper()
     local token, job_work = generation, active_work
     local audio_file
     local function run_recognition()
-        recognition_job = mp.command_native_async({name = 'subprocess', capture_stdout = true,
+        -- reset_session invalidates callbacks before aborting; automatic playback
+        -- cancellation can fire earlier than on_unload and report a false failure.
+        recognition_job = mp.command_native_async({name = 'subprocess', playback_only = false, capture_stdout = true,
             capture_stderr = true, args = args}, function(success, res)
             if token ~= generation then cleanup_work(job_work); return end
             recognition_job = nil
@@ -957,7 +959,7 @@ local function fastwhisper()
         audio_file = audio
         result_file = utils.join_path(output_path, 'selected-audio.srt')
         args = fastwhisper_cmd(audio, output_path)
-        recognition_job = mp.command_native_async({name = 'subprocess', capture_stdout = true, capture_stderr = true,
+        recognition_job = mp.command_native_async({name = 'subprocess', playback_only = false, capture_stdout = true, capture_stderr = true,
             args = audio_segment_args(path, audio, 0, duration, '0:' .. selected['ff-index'])}, function(ok, result)
             if token ~= generation then cleanup_work(job_work); return end
             recognition_job = nil
@@ -1004,7 +1006,7 @@ local function process_audio_segment(segment_audio_file, subtitle_count, callbac
 
     local args = fastwhisper_cmd(segment_audio_file, temp_srt_path)
     local token, work = generation, active_work
-    recognition_job = mp.command_native_async({name = 'subprocess', capture_stdout = true, capture_stderr = true, args = args}, function(ok, result)
+    recognition_job = mp.command_native_async({name = 'subprocess', playback_only = false, capture_stdout = true, capture_stderr = true, args = args}, function(ok, result)
         if token ~= generation then cleanup_work(work); return end
         recognition_job = nil
         local data = subtitle_cache.read(temp_srt)
@@ -1061,7 +1063,7 @@ local function process_video_incrementally(video_path, srt_file, segment_duratio
         msg.error('AI subtitle segment failed: ' .. tostring(reason))
     end
     local function run(args, callback)
-        recognition_job = mp.command_native_async({name = 'subprocess', capture_stdout = true,
+        recognition_job = mp.command_native_async({name = 'subprocess', playback_only = false, capture_stdout = true,
             capture_stderr = true, args = args}, function(ok, result)
             if token ~= generation then cleanup_work(job_work); return end
             recognition_job = nil
