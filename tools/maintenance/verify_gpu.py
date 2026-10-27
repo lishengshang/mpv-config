@@ -12,6 +12,10 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+# Embedded portable Python does not add the script directory to sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from png_output import inspect_testsrc_png
+
 CONFIG = Path(__file__).resolve().parents[2]
 ERRORS = re.compile(
     r'Python exception|Traceback|could not init VS|Disabling filter|'
@@ -21,7 +25,10 @@ ERRORS = re.compile(
 
 
 def png_valid(path):
-    return path.is_file() and path.stat().st_size > 32 and path.read_bytes()[:8] == b'\x89PNG\r\n\x1a\n'
+    try:
+        return inspect_testsrc_png(path.read_bytes())['valid']
+    except OSError:
+        return False
 
 
 def evaluate(returncode, log, frames, timed_out=False, required=3):
@@ -36,7 +43,7 @@ def evaluate(returncode, log, frames, timed_out=False, required=3):
         return False, 'log error: ' + match.group(0)
     if len(frames) < required or not all(png_valid(p) for p in frames):
         return False, 'missing/invalid output frames'
-    return True, f'{len(frames)} real PNG frames'
+    return True, f'{len(frames)} colored testsrc PNG frames'
 
 
 def run_check(mpv, path, kind, folder, timeout, source_width=1280):

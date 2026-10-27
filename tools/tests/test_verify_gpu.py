@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'maintenance'))
 from verify_gpu import CONFIG, evaluate, run_check
-from test_gpu_ux import inspect_testsrc_png
+from png_output import inspect_testsrc_png
 
 
 class TestsrcFrameChecks(unittest.TestCase):
@@ -51,6 +51,26 @@ class TestsrcFrameChecks(unittest.TestCase):
 
 
 class FailureChecks(unittest.TestCase):
+    def test_black_and_corrupt_outputs_cannot_pass(self):
+        colored = TestsrcFrameChecks.png(8, 2)
+        damaged = bytearray(colored)
+        damaged[20] ^= 1
+        for data in (TestsrcFrameChecks.png(8, 2, black=True),
+                     TestsrcFrameChecks.png(16, 6, black=True), colored[:40], damaged):
+            with self.subTest(bytes=len(data)), tempfile.TemporaryDirectory() as temp:
+                frame = Path(temp) / 'output.png'
+                frame.write_bytes(data)
+                self.assertFalse(evaluate(0, 'finished playback', [frame], required=1)[0])
+
+    def test_colored_outputs_pass_and_missing_files_fail(self):
+        with tempfile.TemporaryDirectory() as temp:
+            frames = [Path(temp) / f'{index}.png' for index in range(3)]
+            for frame, layout in zip(frames, ((8, 2), (16, 6), (8, 6))):
+                frame.write_bytes(TestsrcFrameChecks.png(*layout))
+            self.assertTrue(evaluate(0, 'finished playback', frames)[0])
+            frames[-1].unlink()
+            self.assertFalse(evaluate(0, 'finished playback', frames)[0])
+
     def test_no_log_or_frames_cannot_pass(self):
         self.assertFalse(evaluate(0, '', [])[0])
         self.assertFalse(evaluate(0, 'finished playback, success', [])[0])

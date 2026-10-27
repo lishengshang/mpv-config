@@ -95,7 +95,7 @@ python tools/tests/test_gpu_ux.py --case playback --source-width 640 --shader-ca
 
 播放测试只加载 uosc、GPU 脚本和输入绑定，日志/截图在 `cache/gpu-ux/`；默认 1280×720/30fps，不覆盖全部日常脚本。小尺寸暂停切换回归：`python tools/tests/test_gpu_ux.py --case playback --paused --source-width 640 --focused`；覆盖 RIFE、DRBA、两种 ArtCNN、MIX、用户滤镜保留与下一文件，不等待 shader 编译。去掉 `--paused` 比较普通播放。全序列中的暂停测试还覆盖 MIX 激活后的 seek，并核对每次截图时仍处于暂停状态。
 
-测试不以 PNG 文件存在代替有效画面：解码 RGB/RGBA 8/16 位 PNG 的前 32 行，检查合成测试图应有的彩色像素，拒绝 VS 初始化占位黑帧；该规则只用于此处无黑边的 `testsrc2`，不用于判断真实影片的黑场。首次 shader 编译可能远超普通切换耗时，可用 `--timeout` 增加原生进程的总时限；VS 单项初始化时限仍由 GPU 脚本独立管理。`--cold-shader-cache` 仅让 mpv shader 缓存为空，不清除驱动或 TRT 引擎缓存；`--shader-cache-dir` 用于显式复用缓存，二者互斥。
+单项验证器与播放测试共用像素检查，不以 PNG 文件存在或文件头正确代替有效画面：解码 RGB/RGBA 8/16 位 PNG 的前 32 行，检查合成测试图应有的彩色像素，拒绝 VS 初始化占位黑帧；该规则只用于此处无黑边的 `testsrc2`，不用于判断真实影片的黑场。首次 shader 编译可能远超普通切换耗时，可用 `--timeout` 增加原生进程的总时限；VS 单项初始化时限仍由 GPU 脚本独立管理。`--cold-shader-cache` 仅让 mpv shader 缓存为空，不清除驱动或 TRT 引擎缓存；`--shader-cache-dir` 用于显式复用缓存，二者互斥。
 
 导出产物在 `cache/packages/`：基础配置 ZIP、`mpv-VS-RTX-addon.7z` 与 SHA256。需要 Git/7-Zip；配置排除私人文件/缓存，VS 包不含配置和引擎缓存。它是本机组件快照，使用前核对附带 SHA256 与上游许可；旧包不自动包含后续代码修改。
 
