@@ -403,6 +403,13 @@ def configure(root, receipts):
         component_launcher(root, write=True)
     local = inside(root, 'portable_config/local.conf')
     text = local.read_text(encoding='utf-8-sig') if local.is_file() else ''
+    registration = inside(root, 'portable_config/state/ai-runtime.json')
+    protected = set()
+    if registration.is_file():
+        record = json.loads(registration.read_text(encoding='utf-8'))
+        if record.get('schema') != 1 or not isinstance(record.get('managed_keys'), list):
+            raise ValueError('Invalid unified AI registration; repair with tools/setup-ai-subtitles.ps1')
+        protected = {key for key in record['managed_keys'] if isinstance(key, str) and key.startswith('sub_fastwhisper-')}
     values = {}
     for item in receipts:
         directory = Path(item['root'])
@@ -418,6 +425,8 @@ def configure(root, receipts):
             values['sub_fastwhisper-qwen_model'] = directory / 'models/Qwen3-ASR-1.7B'
             values['sub_fastwhisper-qwen_aligner'] = directory / 'models/Qwen3-ForcedAligner-0.6B'
     for key, value in values.items():
+        if key in protected:
+            continue
         pattern = r'^\s*script-opts-append=' + re.escape(key) + r'=.*$'
         line = 'script-opts-append=' + key + '=' + Path(value).as_posix()
         text = re.sub(pattern, lambda _: line, text, flags=re.M) if re.search(pattern, text, re.M) else text.rstrip() + '\n' + line + '\n'

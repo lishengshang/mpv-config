@@ -27,10 +27,17 @@
 #script-opts-append=sub_fastwhisper-api_mode=your-model
 #script-opts-append=sub_fastwhisper-api_key=your-private-key
 
+# 三种 AI 后端统一安装／迁移：tools/setup-ai-subtitles.ps1 -ConfigureLocal
+# 默认根目录为用户的 .cache/mpv-ai；脚本填写以下路径及 output_path，不改私人接口与调参。
+# 运行环境在 runtimes/{whisper,qwen,sensevoice}，模型在 models/{whisper,qwen,sensevoice}，字幕在 subtitles。
 # Qwen3-ASR 备选：独立 Python 3.12 环境和本地模型；不复用 VS Python。
 #script-opts-append=sub_fastwhisper-qwen_python=C:/path/to/qwen-asr/.venv/Scripts/python.exe
 #script-opts-append=sub_fastwhisper-qwen_model=C:/path/to/qwen-asr/models/Qwen3-ASR-1.7B
+#script-opts-append=sub_fastwhisper-qwen_small_model=C:/path/to/mpv-ai/models/qwen/Qwen3-ASR-0.6B
 #script-opts-append=sub_fastwhisper-qwen_aligner=C:/path/to/qwen-asr/models/Qwen3-ForcedAligner-0.6B
+#script-opts-append=sub_fastwhisper-sensevoice_python=C:/path/to/mpv-ai/runtimes/sensevoice/python/python.exe
+#script-opts-append=sub_fastwhisper-sensevoice_model=C:/path/to/mpv-ai/models/sensevoice/SenseVoiceSmall
+#script-opts-append=sub_fastwhisper-output_path=C:/path/to/mpv-ai/subtitles
 
 # alass 可执行文件，autosubsync.lua 的字幕同步后端。
 # 默认值 alass_path=alass 是裸名，靠 mpv.exe 同目录或 PATH 解析，通常无需在此设置。

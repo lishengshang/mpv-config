@@ -20,6 +20,15 @@ import components
 
 
 class ComponentTests(unittest.TestCase):
+    def test_component_repair_preserves_registered_unified_ai_paths(self):
+        local = self.root / 'portable_config/local.conf'
+        original = 'script-opts-append=sub_fastwhisper-fast_whisper_path=C:/AI/runtimes/whisper/faster-whisper-xxl.exe\n'
+        local.write_text(original, encoding='utf-8', newline='\n')
+        store.atomic_json(self.root/'portable_config/state/ai-runtime.json', dict(schema=1,
+                          managed_keys=['sub_fastwhisper-fast_whisper_path','sub_fastwhisper-whisper_model_dir']))
+        store.configure(self.root, [dict(id='whisper', root=str(self.root/'components/whisper/version'))])
+        self.assertEqual(local.read_text(encoding='utf-8'), original)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='mpv-components-test-')
         self.base = Path(self.temp.name)

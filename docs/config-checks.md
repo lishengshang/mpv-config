@@ -33,6 +33,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/check-config.ps1 -Mpv 
 | 检查 GPU 实际输出 | 双击 `tools/verify-gpu.cmd`，可能触发耗时的首次编译 |
 | 导入已有 VS 运行时 | 双击 `tools/install-vs-runtime.cmd` |
 | 部署 Qwen 源环境 | `tools/setup-qwen-asr.ps1`，见 [字幕说明](ai-subtitles.md) |
+| 统一 AI 后端／模型／字幕目录 | `tools/setup-ai-subtitles.ps1`，见 [字幕说明](ai-subtitles.md#统一安装与目录) |
 | 导出配置或本机 VS 包 | `tools/export-config.ps1`、`tools/export-vs-addon.ps1` |
 | 导出生成的字幕 | 播放器 AI 字幕管理菜单调用 `tools/export-ai-subtitle.ps1` |
 
