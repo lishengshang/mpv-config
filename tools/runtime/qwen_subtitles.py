@@ -82,6 +82,59 @@ def stamp(seconds):
     return f'{ms // 3600000:02}:{ms // 60000 % 60:02}:{ms // 1000 % 60:02},{ms % 1000:03}'
 
 
+def extract_audio(args, wav_path):
+    cmd = [args.ffmpeg, '-hide_banner', '-nostdin', '-y', '-i', args.input,
+           '-map', args.audio_map, '-vn', '-ac', '1', '-ar', '16000',
+           '-af', 'aresample=async=1:first_pts=0,silencedetect=noise=-35dB:d=0.4',
+           '-c:a', 'pcm_s16le', str(wav_path)]
+    process = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                             encoding='utf-8', errors='replace', creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    if process.returncode:
+        raise RuntimeError('FFmpeg audio extraction failed: ' + process.stderr[-3000:])
+    return [float(s) for s in re.findall(r'silence_end: ([0-9.]+)', process.stderr)]
+
+
+def read_samples(audio, start, end):
+    import numpy as np
+    rate = audio.getframerate()
+    audio.setpos(round(start * rate))
+    return np.frombuffer(audio.readframes(round((end - start) * rate)), dtype='<i2').astype(np.float32) / 32768
+
+
+def speech_batches(audio, windows, batch_size):
+    """Keep audio memory bounded and preserve each non-silent window's offset."""
+    import numpy as np
+    batch = []
+    for start, end in windows:
+        data = read_samples(audio, start, end)
+        if len(data) and float(np.max(np.abs(data))) >= 0.003:
+            batch.append((start, end, data))
+        if len(batch) == batch_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
+def write_srt(output, cues, duration):
+    payload, last_end = [], 0.0
+    for start, end, text in cues:
+        if not math.isfinite(start + end) or end < start:
+            raise RuntimeError('Invalid subtitle timing')
+        start = max(last_end, start)
+        end = min(duration, max(start + 0.04, end))
+        if end <= start or not text.strip():
+            raise RuntimeError('Invalid subtitle timing or empty text')
+        payload.append(f'{len(payload) + 1}\n{stamp(start)} --> {stamp(end)}\n{text.strip()}\n\n')
+        last_end = end
+    if not payload:
+        raise RuntimeError('No speech recognized; no completed subtitle was created')
+    pending = output.with_suffix('.srt.pending')
+    pending.write_text(''.join(payload), encoding='utf-8', newline='\n')
+    pending.replace(output)
+    return len(payload)
+
+
 def timed_cues(text, items, offset, duration, width):
     """Restore punctuation from the transcript; use aligned times only for timing."""
     spans, cursor = [], 0
@@ -148,14 +201,8 @@ def run(args):
     output.parent.mkdir(parents=True, exist_ok=True)
     wav_path = output.parent / 'qwen-audio.wav'
     started = time.monotonic()
-    cmd = [args.ffmpeg, '-hide_banner', '-nostdin', '-y', '-i', args.input,
-           '-map', args.audio_map, '-vn', '-ac', '1', '-ar', '16000',
-           '-af', 'aresample=async=1:first_pts=0,silencedetect=noise=-35dB:d=0.4', '-c:a', 'pcm_s16le', str(wav_path)]
-    process = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                             encoding='utf-8', errors='replace', creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-    if process.returncode:
-        raise RuntimeError('FFmpeg audio extraction failed: ' + process.stderr[-3000:])
-    silences = [float(s) for s in re.findall(r'silence_end: ([0-9.]+)', process.stderr)]
+    silences = extract_audio(args, wav_path)
+    extracted = time.monotonic()
     with wave.open(str(wav_path)) as audio:
         rate = audio.getframerate()
         duration = audio.getnframes() / rate
@@ -164,26 +211,28 @@ def run(args):
         windows = list(chunks(duration, silences, args.chunk_seconds))
 
         def samples(start, end):
-            audio.setpos(round(start * rate))
-            return np.frombuffer(audio.readframes(round((end - start) * rate)), dtype='<i2').astype(np.float32) / 32768
+            return read_samples(audio, start, end)
 
         dtype = torch.bfloat16
         settings = dict(dtype=dtype, device_map='cuda:0', attn_implementation='sdpa', local_files_only=True)
         torch.cuda.reset_peak_memory_stats()
         print('Qwen: loading ASR', flush=True)
-        model = Qwen3ASRModel.from_pretrained(args.model, max_inference_batch_size=1,
+        model = Qwen3ASRModel.from_pretrained(args.model, max_inference_batch_size=args.batch_size,
                                             max_new_tokens=1024, **settings)
         records = []
-        for index, (start, end) in enumerate(windows):
-            data = samples(start, end)
-            # Entirely silent windows are skipped rather than prompting a language model with silence.
-            if len(data) == 0 or float(np.max(np.abs(data))) < 0.003:
-                continue
-            result = model.transcribe(audio=(data, rate), language=language_name(args.language))[0]
-            text = result.text.strip()
-            if text:
-                records.append(dict(start=start, end=end, text=text, language=result.language))
-            print(f'Qwen: recognized {index + 1}/{len(windows)}', flush=True)
+        loaded = time.monotonic()
+        recognized = 0
+        for batch in speech_batches(audio, windows, args.batch_size):
+            results = model.transcribe(audio=[(data, rate) for _, _, data in batch], language=language_name(args.language))
+            if len(results) != len(batch):
+                raise RuntimeError('ASR batch output count differs from input')
+            for (start, end, _), result in zip(batch, results):
+                text = result.text.strip()
+                if text:
+                    records.append(dict(start=start, end=end, text=text, language=result.language))
+            recognized += len(batch)
+            print(f'Qwen: recognized {recognized}/{len(windows)}', flush=True)
+        decoded = time.monotonic()
         # Persist text before releasing ASR. Never load both GPU models together.
         (output.parent / 'qwen-transcript.json').write_text(json.dumps(records, ensure_ascii=False), encoding='utf-8')
         del model
@@ -208,22 +257,14 @@ def run(args):
                 cues.append((start, end, text))
                 coarse += 1
             print(f'Qwen: timed {index + 1}/{len(records)}', flush=True)
-        payload = []
-        last_end = 0.0
-        for start, end, text in cues:
-            start = max(last_end, start)
-            end = min(duration, max(start + 0.04, end))
-            if end <= start or not text.strip():
-                raise RuntimeError('Invalid subtitle timing')
-            payload.append(f'{len(payload) + 1}\n{stamp(start)} --> {stamp(end)}\n{text}\n\n')
-            last_end = end
-        pending = output.with_suffix('.srt.pending')
-        pending.write_text(''.join(payload), encoding='utf-8', newline='\n')
-        pending.replace(output)
+        cue_count = write_srt(output, cues, duration)
         stats = dict(model=Path(args.model).name, device=torch.cuda.get_device_name(), dtype='bfloat16',
                      duration=duration, elapsed=round(time.monotonic() - started, 2),
                      peak_allocated_mib=round(torch.cuda.max_memory_allocated() / 1048576),
-                     coarse_chunks=coarse, cues=len(payload), languages=sorted({r['language'] for r in records}))
+                     batch_size=args.batch_size, extract_seconds=round(extracted-started, 2),
+                     load_seconds=round(loaded-extracted, 2), decode_seconds=round(decoded-loaded, 2),
+                     align_seconds=round(time.monotonic()-decoded, 2),
+                     coarse_chunks=coarse, cues=cue_count, languages=sorted({r['language'] for r in records}))
         (output.parent / 'qwen-stats.json').write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding='utf-8')
         print('QWEN_ASR_OK ' + json.dumps(stats, ensure_ascii=False), flush=True)
 
@@ -238,6 +279,7 @@ def main():
     parser.add_argument('--audio-map', default='0:a:0')
     parser.add_argument('--language', default='')
     parser.add_argument('--chunk-seconds', type=float, default=20)
+    parser.add_argument('--batch-size', type=int, choices=range(1, 9), default=2)
     parser.add_argument('--max-line-width', type=int, default=100)
     args = parser.parse_args()
     if not 2 <= args.chunk_seconds <= 30 or args.max_line_width < 1:

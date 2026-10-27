@@ -16,15 +16,25 @@ local subtitle_layout = require 'ai-subtitle-layout'
 local translation_queue = require 'ai-translation-job'
 local subtitle_pipeline = require 'ai-subtitle-pipeline'
 local subtitle_ui = require 'ai-subtitle-ui'
+local asr_presets = require 'ai-asr-presets'
 
 ---- Script Options ----
 local o = {
     -- Default engine; menu selection lasts for this player session.
     backend = 'whisper',
+    whisper_mode = 'context',
+    whisper_batch_size = 4,
     qwen_python = 'python',
     qwen_model = '~~/cache/qwen-asr/models/Qwen3-ASR-1.7B',
+    qwen_small_model = '~~/cache/qwen-asr/models/Qwen3-ASR-0.6B',
+    qwen_variant = 'quality',
+    qwen_batch_size = 2,
     qwen_aligner = '~~/cache/qwen-asr/models/Qwen3-ForcedAligner-0.6B',
     qwen_chunk_seconds = 20,
+    sensevoice_python = 'python',
+    sensevoice_model = '~~/cache/sensevoice/models/SenseVoiceSmall',
+    sensevoice_batch_size = 4,
+    sensevoice_chunk_seconds = 20,
     ffmpeg_path = 'ffmpeg',
     -- Path to the faster-whisper executable, you can download it from here:
     -- https://github.com/Purfview/whisper-standalone-win
@@ -90,12 +100,17 @@ options.read_options(o, _, function() end)
 
 local fast_whisper_path = mp.command_native({ "expand-path", o.fast_whisper_path })
 local whisper_model_dir = o.whisper_model_dir ~= '' and mp.command_native({'expand-path', o.whisper_model_dir}) or ''
-local selected_backend = o.backend == 'qwen' and 'qwen' or 'whisper'
+local selected_backend = (o.backend == 'qwen' or o.backend == 'sensevoice') and o.backend or 'whisper'
 mp.set_property_native('user-data/ai-subtitles/backend', selected_backend)
 local qwen_python = mp.command_native({'expand-path', o.qwen_python})
-local qwen_model = mp.command_native({'expand-path', o.qwen_model})
+local function selected_qwen_model()
+    return mp.command_native({'expand-path', o.qwen_variant == 'small' and o.qwen_small_model or o.qwen_model})
+end
 local qwen_aligner = mp.command_native({'expand-path', o.qwen_aligner})
 local qwen_runner = mp.command_native({'expand-path', '~~/tools/runtime/qwen_subtitles.py'})
+local sensevoice_python = mp.command_native({'expand-path', o.sensevoice_python})
+local sensevoice_model = mp.command_native({'expand-path', o.sensevoice_model})
+local sensevoice_runner = mp.command_native({'expand-path', '~~/tools/runtime/sensevoice_subtitles.py'})
 local ffmpeg_path = mp.command_native({'expand-path', o.ffmpeg_path})
 local cache_root = mp.command_native({ "expand-path",
     o.output_path == "source" and "~~/cache/ai-subtitles" or o.output_path })
@@ -206,8 +221,9 @@ local function current_entry(extra)
         tostring(o.segment_duration), tostring(o.max_line_width),
         extra or ''})
     if selected_backend == 'qwen' then
+        local qwen_model = selected_qwen_model()
         -- Qwen has an independent recognition namespace; translator/style settings stay separate.
-        identity = utils.format_json({'qwen-asr-cache-v2', source,
+        identity = utils.format_json({'qwen-asr-cache-v3', source,
             tostring(info.size or ''), tostring(info.mtime or ''),
             tostring(mp.get_property_native('aid', 'auto')), qwen_python, qwen_model, qwen_aligner,
             subtitle_cache.digest(subtitle_cache.read(qwen_model .. '/revision.json') or
@@ -215,11 +231,21 @@ local function current_entry(extra)
             subtitle_cache.digest(subtitle_cache.read(qwen_aligner .. '/revision.json') or
                 subtitle_cache.read(qwen_aligner .. '/config.json') or ''),
             subtitle_cache.digest(subtitle_cache.read(qwen_runner) or ''),
-            'cuda:bfloat16:sdpa', o.language, tostring(o.qwen_chunk_seconds), tostring(o.max_line_width),
+            'cuda:bfloat16:sdpa', o.language, tostring(o.qwen_chunk_seconds), tostring(o.max_line_width), tostring(o.qwen_batch_size),
             extra or ''})
+    elseif selected_backend == 'sensevoice' then
+        identity = utils.format_json({'sensevoice-cache-v1', source, tostring(info.size or ''), tostring(info.mtime or ''),
+            tostring(mp.get_property_native('aid', 'auto')), sensevoice_python, sensevoice_model,
+            subtitle_cache.digest(subtitle_cache.read(sensevoice_model .. '/revision.json') or ''),
+            subtitle_cache.digest(subtitle_cache.read(sensevoice_runner) or ''),
+            subtitle_cache.digest(subtitle_cache.read(qwen_runner) or ''),
+            o.language, tostring(o.sensevoice_chunk_seconds), tostring(o.sensevoice_batch_size), tostring(o.max_line_width), extra or ''})
     elseif o.use_segment and o.segment_silence then
         -- Keep whole/fixed-slice identities intact; silence slicing has its own result.
         identity = utils.format_json({'whisper-silence-v2', identity})
+    end
+    if selected_backend == 'whisper' and o.whisper_mode == 'balanced' then
+        identity = utils.format_json({'whisper-batched-v1', identity, tostring(o.whisper_batch_size)})
     end
     if selected_backend == 'whisper' and whisper_model_dir ~= '' then
         local model = utils.file_info(utils.join_path(whisper_model_dir, 'faster-whisper-' .. o.model .. '/model.bin')) or {}
@@ -308,6 +334,7 @@ local function publish_status(translation_status)
         report = nil
     end
     mp.set_property_native('user-data/ai-subtitles/status', {backend = selected_backend,
+        preset = asr_presets.current(selected_backend, o).id, language = o.language,
         running = whisper_running or (report and (report.state == 'running' or
             report.state == 'waiting' or report.state == 'retrying')) or false,
         cached = cached, media = entry ~= nil, auto_translate = o.auto_translate,
@@ -317,7 +344,14 @@ local function publish_status(translation_status)
         translated = artifacts.translated ~= nil, recognizing = whisper_running, translation = report,
         recognition_error = recognition_error,
         auto_translate = o.auto_translate, target = o.translate, max_requests = o.translation_max_requests,
-        backend = selected_backend == 'qwen' and 'Qwen3-ASR' or ('Whisper ' .. o.model),
+        backend = asr_presets.current(selected_backend, o).title,
+        language = asr_presets.language_title(o.language),
+        existing_subtitles = (function()
+            for _, track in ipairs(mp.get_property_native('track-list', {})) do
+                if track.type == 'sub' then return true end
+            end
+            return false
+        end)(),
         api = o.api_key and o.api_key:match('%S') ~= nil})
 end
 
@@ -339,8 +373,8 @@ end
 
 local function remember_language(source)
     local metadata = utils.parse_json(subtitle_cache.read(source:gsub('%.srt$', '.json')) or '')
-    if selected_backend == 'qwen' then
-        metadata = utils.parse_json(subtitle_cache.read(utils.join_path(output_path, 'qwen-stats.json')) or '')
+    if selected_backend ~= 'whisper' then
+        metadata = utils.parse_json(subtitle_cache.read(utils.join_path(output_path, selected_backend .. '-stats.json')) or '')
     end
     local languages = metadata and (metadata.languages or {metadata.language}) or {}
     if #languages == 0 and o.language ~= '' then languages = {o.language} end
@@ -490,6 +524,13 @@ local function load_cached(entry, auto)
 end
 
 local function finish_recognition(source)
+    if not subtitle_cache.valid_generated_srt(subtitle_cache.read(source), mp.get_property_number('duration', 0)) then
+        recognition_error = selected_backend == 'whisper' and o.whisper_mode == 'balanced' and
+            '批量输出的时间轴无效，请在识别方案中切换 Whisper 连贯优先后重试' or
+            '识别输出的时间轴无效，已有字幕保留；请更换方案或检查后端输出'
+        ui.notice(recognition_error, 7)
+        return false
+    end
     remember_language(source)
     local ok, err = subtitle_cache.commit(active_entry, source)
     if not ok then
@@ -884,6 +925,11 @@ local function fastwhisper_cmd(file_path, sub_path)
         table.insert(args, o.compute_type)
     end
 
+    if o.whisper_mode == 'balanced' then
+        args[#args + 1] = '--batched'
+        args[#args + 1] = '--batch_size'; args[#args + 1] = tostring(o.whisper_batch_size)
+    end
+
     return args
 end
 
@@ -910,9 +956,17 @@ local function fastwhisper()
         local track = mp.get_property_native('current-tracks/audio', {})
         local audio_map = track['ff-index'] and ('0:' .. track['ff-index']) or '0:a:0'
         args = {qwen_python, qwen_runner, '--input', path, '--output', result_file,
-            '--model', qwen_model, '--aligner', qwen_aligner, '--ffmpeg', ffmpeg_path,
+            '--model', selected_qwen_model(), '--aligner', qwen_aligner, '--ffmpeg', ffmpeg_path,
             '--audio-map', audio_map, '--language', o.language,
-            '--chunk-seconds', tostring(o.qwen_chunk_seconds), '--max-line-width', o.max_line_width}
+            '--chunk-seconds', tostring(o.qwen_chunk_seconds), '--batch-size', tostring(o.qwen_batch_size), '--max-line-width', o.max_line_width}
+    elseif selected_backend == 'sensevoice' then
+        result_file = utils.join_path(output_path, 'sensevoice.srt')
+        local track = mp.get_property_native('current-tracks/audio', {})
+        args = {sensevoice_python, sensevoice_runner, '--input', path, '--output', result_file,
+            '--model', sensevoice_model, '--ffmpeg', ffmpeg_path,
+            '--audio-map', track['ff-index'] and ('0:' .. track['ff-index']) or '0:a:0',
+            '--language', o.language, '--chunk-seconds', tostring(o.sensevoice_chunk_seconds),
+            '--batch-size', tostring(o.sensevoice_batch_size), '--max-line-width', o.max_line_width}
     end
     local token, job_work = generation, active_work
     local audio_file
@@ -926,7 +980,7 @@ local function fastwhisper()
             if audio_file then os.remove(audio_file) end
             mp.set_osd_ass(screenx, screeny, '')
             if success and res and res.status == 0 then
-                if selected_backend == 'qwen' then msg.info(res.stdout or '') end
+                if selected_backend ~= 'whisper' then msg.info(res.stdout or '') end
                 if finish_recognition(result_file) then
                     if selected_backend == 'qwen' then
                         local stats = utils.parse_json(subtitle_cache.read(utils.join_path(output_path, 'qwen-stats.json')) or '')
@@ -1267,6 +1321,8 @@ end
 
 local function whisper(force)
     if whisper_running then explain('字幕正在识别，可在 AI 字幕页查看或取消', 4); return end
+    local invalid = asr_presets.validate(o, selected_backend)
+    if invalid then explain(invalid, 6); return end
     local selected_audio = mp.get_property_native('current-tracks/audio', {})
     if selected_audio.external then explain('本地识别暂不支持外挂音轨，请选择内置音轨', 5); return end
     local aid = mp.get_property_native('aid')
@@ -1287,9 +1343,14 @@ local function whisper(force)
         end
         local track = mp.get_property_native('current-tracks/audio', {})
         if track.external then explain('Qwen 暂不支持外挂音轨，请选择内置音轨', 5); return end
-        if not file_exists(qwen_runner) or not file_exists(qwen_model .. '/config.json') or
+        if not file_exists(qwen_runner) or not file_exists(selected_qwen_model() .. '/config.json') or
             not file_exists(qwen_aligner .. '/config.json') then
             explain('Qwen 本地依赖未配置，可在更多设置中切回 Whisper', 6); return
+        end
+    elseif selected_backend == 'sensevoice' then
+        if is_protocol(mp.get_property('path')) then explain('SenseVoice 目前支持本地媒体；网络媒体请选择 Whisper', 5); return end
+        if not file_exists(sensevoice_runner) or not file_exists(sensevoice_model .. '/model.pt') then
+            explain('SenseVoice 本地依赖未配置，安装方法见 docs/ai-subtitles.md', 6); return
         end
     end
     local entry = current_entry()
@@ -1307,7 +1368,7 @@ local function whisper(force)
     if not force and load_cached(entry, false) then maybe_auto_translate(entry.srt); return end
     reset_session()
     if not begin_work(entry) then return end
-    if selected_backend == 'qwen' then fastwhisper(); return end
+    if selected_backend ~= 'whisper' then fastwhisper(); return end
     local path =  mp.get_property_native("path")
     local cache = mp.get_property_native("cache")
     local cache_state = mp.get_property_native("demuxer-cache-state")
@@ -1331,19 +1392,25 @@ end
 
 local function backend_menu()
     local items = {{title = '返回更多设置', value = {'script-message-to', 'sub_fastwhisper', 'sub-fastwhisper-settings'}}}
-    for _, backend in ipairs({'whisper', 'qwen'}) do
-        items[#items + 1] = {title = backend == 'whisper' and ('Whisper ' .. o.model) or 'Qwen3-ASR 1.7B',
-            active = selected_backend == backend,
-            hint = backend == 'whisper' and '默认方案' or '本地识别 + 时间轴对齐',
-            value = {'script-message-to', 'sub_fastwhisper', 'sub-fastwhisper-backend', backend}}
+    for _, choice in ipairs(asr_presets.choices) do
+        local ready = choice.backend == 'whisper' or
+            (choice.backend == 'sensevoice' and file_exists(sensevoice_model .. '/model.pt')) or
+            (choice.backend == 'qwen' and file_exists(mp.command_native({'expand-path',
+                choice.mode == 'small' and o.qwen_small_model or o.qwen_model}) .. '/config.json') and
+                file_exists(qwen_aligner .. '/config.json'))
+        items[#items + 1] = {title = choice.title,
+            active = asr_presets.current(selected_backend, o).id == choice.id,
+            hint = ready and choice.hint or '尚未安装模型 · 安装方法见字幕说明',
+            value = {'script-message-to', 'sub_fastwhisper', 'sub-fastwhisper-preset', choice.id}}
     end
     return {type = 'ai-subtitle-backend', title = 'AI 字幕识别方案', keep_open = true,
         footnote = '选择在当前播放器内保持；Alt+f 生成或复用对应缓存', items = items}
 end
 
-local function select_backend(backend)
-    if backend ~= 'whisper' and backend ~= 'qwen' then msg.error('Unknown ASR backend'); return end
-    if selected_backend ~= backend then
+local function select_backend(backend, preset, language)
+    if backend ~= 'whisper' and backend ~= 'qwen' and backend ~= 'sensevoice' then msg.error('Unknown ASR backend'); return end
+    if selected_backend ~= backend or (preset and asr_presets.current(selected_backend, o).id ~= preset.id) or
+        (language ~= nil and language ~= o.language) then
         reset_session()
         -- Remove only tracks from our cache, preserving externally provided subtitles.
         local prefix = normalize(cache_root):gsub('\\', '/'):lower():gsub('/+$', '') .. '/'
@@ -1354,14 +1421,34 @@ local function select_backend(backend)
             end
         end
         selected_backend = backend
+        if preset and preset.backend == 'whisper' then o.whisper_mode = preset.mode end
+        if preset and preset.backend == 'qwen' then o.qwen_variant = preset.mode end
+        if language ~= nil then o.language = language end
         mp.set_property_native('user-data/ai-subtitles/backend', selected_backend)
         if mp.get_property('path') then load_cached(current_entry(), true) end
     end
-    ui.notice('识别方案已切换为 ' .. (selected_backend == 'qwen' and 'Qwen3-ASR' or 'Whisper'), 4)
+    ui.notice(asr_presets.current(selected_backend, o).title .. ' · ' .. asr_presets.language_title(o.language), 4)
     publish_status()
     if mp.get_property_native('user-data/uosc/menu/type') == 'ai-subtitle-backend' then
         mp.commandv('script-message-to', 'uosc', 'update-menu', utils.format_json(backend_menu()))
     end
+end
+
+local function selection_busy()
+    if mp.get_property_native('user-data/ai-subtitles/status', {}).running then
+        explain('请先取消当前任务，再切换识别方案或语言', 5); return true
+    end
+    return false
+end
+
+local function language_menu()
+    local items = {{title='返回更多设置', value={'script-message-to', 'sub_fastwhisper', 'sub-fastwhisper-settings'}}}
+    for _, language in ipairs(asr_presets.languages) do
+        items[#items + 1] = {title=language[2], active=o.language == language[1],
+            value={'script-message-to', 'sub_fastwhisper', 'sub-fastwhisper-language', language[1] == '' and 'auto' or language[1]}}
+    end
+    return {type='ai-subtitle-language', title='原声语言', keep_open=true, items=items,
+        footnote='默认自动检测；已知语种可手动指定。选择跨文件保持，重启恢复配置。'}
 end
 
 local function export_cached(destination, kind)
@@ -1443,7 +1530,35 @@ mp.register_script_message('sub-fastwhisper-auto-translate-toggle', function()
     ui.notice(o.auto_translate == 'foreign' and '已开启日语等语种自动翻译，仅影响后续任务' or '已关闭自动翻译，仍可手动翻译', 5)
     publish_status()
 end)
-mp.register_script_message('sub-fastwhisper-backend', select_backend)
+mp.register_script_message('sub-fastwhisper-backend', function(backend) select_backend(backend) end)
+mp.register_script_message('sub-fastwhisper-preset', function(id)
+    local choice = asr_presets.find(id)
+    if not choice then msg.error('Unknown ASR preset'); return end
+    if selection_busy() then return end
+    select_backend(choice.backend, choice)
+end)
+mp.register_script_message('sub-fastwhisper-language-menu', function()
+    mp.commandv('script-message-to', 'uosc', 'open-menu', utils.format_json(language_menu()))
+end)
+mp.register_script_message('sub-fastwhisper-language', function(code)
+    if selection_busy() then return end
+    code = code == 'auto' and '' or code
+    local known = false
+    for _, language in ipairs(asr_presets.languages) do if code == language[1] then known = true end end
+    if not known then return end
+    select_backend(selected_backend, nil, code)
+    if mp.get_property_native('user-data/uosc/menu/type') == 'ai-subtitle-language' then
+        mp.commandv('script-message-to', 'uosc', 'update-menu', utils.format_json(language_menu()))
+    end
+end)
+mp.register_script_message('sub-fastwhisper-existing', function()
+    mp.commandv('script-message-to', 'uosc', 'open-menu', utils.format_json({type='ai-subtitle-existing',
+        title='使用已有字幕', keep_open=true, items={
+            {title='选择内封／已加载字幕…', value={'script-binding', 'uosc/subtitles'}},
+            {title='加载本地字幕文件…', value={'script-binding', 'uosc/load-subtitles'}},
+            {title='搜索下载字幕…', hint='需要字幕下载服务配置', value={'script-message-to', 'sub_assrt', 'sub-assrt'}},
+        }, footnote='影视优先使用匹配版本的现成字幕；缺失时可返回 AI 字幕生成。'}))
+end)
 mp.register_script_message('sub-fastwhisper-backend-menu', function()
     mp.commandv('script-message-to', 'uosc', 'open-menu', utils.format_json(backend_menu()))
 end)

@@ -37,6 +37,25 @@ function M.valid_srt(data)
     return count > 0
 end
 
+-- Generated single-track transcripts must also have a usable monotonic timeline.
+-- External/professional SRTs can deliberately overlap, so keep valid_srt separate.
+function M.valid_generated_srt(data, duration)
+    if not M.valid_srt(data) then return false end
+    local last_end = 0
+    local function seconds(value)
+        local h,m,s,ms = value:match('(%d+):(%d+):(%d+),(%d+)')
+        if tonumber(m) >= 60 or tonumber(s) >= 60 then return nil end
+        return h * 3600 + m * 60 + s + ms / 1000
+    end
+    for first, last in data:gmatch('(%d%d:%d%d:%d%d,%d%d%d)%s+%-%->%s+(%d%d:%d%d:%d%d,%d%d%d)') do
+        local start, finish = seconds(first), seconds(last)
+        if not start or not finish or start < last_end - 0.05 or finish <= start or
+            (duration and duration > 0 and finish > duration + 0.1) then return false end
+        last_end = finish
+    end
+    return true
+end
+
 function M.mkdir(path)
     local info = utils.file_info(path)
     if info then return info.is_dir == true end

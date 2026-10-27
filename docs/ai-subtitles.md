@@ -1,14 +1,48 @@
 # AI 字幕
 
-生成入口为 `Alt+f` 或菜单 **字幕 → 下载／生成 → AI 字幕…** 中的“生成字幕”；`Alt+F` 是另一功能。默认仍用 [faster-whisper-xxl](https://github.com/Purfview/whisper-standalone-win)、`large-v3-turbo`、CUDA、float16，语种留空自动检测。备选为 [Qwen3-ASR 1.7B](https://github.com/QwenLM/Qwen3-ASR)，两者独立运行；本机路径写在忽略的 `local.conf`。
+生成入口为 `Alt+f` 或菜单 **字幕 → 下载／生成 → AI 字幕…** 中的“生成字幕”；`Alt+F` 是另一功能。默认用 [faster-whisper-xxl](https://github.com/Purfview/whisper-standalone-win)、`large-v3-turbo`、CUDA、float16、普通推理（`whisper_mode=context`），语种自动检测并保留逐词时间轴。批量提速为可选速度档；当前后端版本的长片实测存在无效时间轴，故不默认开启。方案由用户选择，不按文件名猜测语种，不在失败时静默换模型。路径放在忽略的 `local.conf`，共享默认参数在 `script-opts/sub_fastwhisper.conf`。
+
+## 选择识别方案
+
+在 **更多设置 → 识别方案** 选择；原声语言可另选自动、中、英、日、粤、韩，默认自动。菜单选择在当前播放器跨文件保持，重启恢复配置；任务期间先取消再切换。
+
+| 方案 | 适用场景 | 行为与取舍 |
+| --- | --- | --- |
+| Whisper · 多语言均衡（默认） | 中文课程、英语、日语、影视，通用起点 | `whisper_mode=context`，普通推理；保留上下文、后端默认 beam=5 和逐词时间戳，质量仍取决于片源 |
+| Whisper · 批量提速 | 愿意抽查结果的速度档 | `whisper_mode=balanced`，`--batched --batch_size 4`；保留逐词时间戳，上下文不同，可能漏句、重复或出现无效时间轴。失败时提示选择普通推理，不静默换方案 |
+| SenseVoice · 中文课程 | 中文为主，兼顾英、粤、日、韩 | [SenseVoiceSmall](https://github.com/QwenAudio/SenseVoice)，batch=4；模型自带 CTC 逐词校时，不按字数伪造时间轴。其他语言请选 Whisper/Qwen |
+| Qwen · 轻量 0.6B | 希望比较轻量多语言效果 | `qwen_variant=small`，batch=2；识别后释放模型，再加载 ForcedAligner |
+| Qwen · 质量 1.7B | 愿意增加资源比较识别效果 | `qwen_variant=quality`，batch=2；与轻量版使用同一对齐流程，不承诺对所有视频更准确 |
+
+8GB 显存从默认 batch 开始；Whisper 的 `whisper_batch_size`、Qwen 的 `qwen_batch_size` 和 SenseVoice 的 `sensevoice_batch_size` 可各自调低。与重型画面增强并用会争用显存；显存不足时保留失败原因，让用户降低 batch 或换方案。不同模式、模型、语言和 batch 隔离识别缓存；原有完成字幕保留，不能把普通推理结果冒充新批量模式的测试结果。
+
+影视先用 AI 页的 **使用已有／网上字幕**：选择内封／已加载字幕、加载本地文件，或调用现有 `sub_assrt` 下载入口（需其服务配置）；仍保留 `F11`、加载字幕菜单与 `Ctrl+f`。不会因打开影视或发现字幕缺失就自动生成或下载。显式生成可以替代不合用的字幕，后台完成不抢占用户在任务期间新选的字幕。内封 ASS/图形字幕可正常播放；当前校准翻译入口需要有效的外部 SRT。
+
+## 统一安装与目录
+
+统一根目录默认是用户的 `.cache/mpv-ai`，配置仓库位置不变；可用 `-Root` 指定其他目录。三个后端分为 `runtimes/{whisper,qwen,sensevoice}` 与 `models/{whisper,qwen,sensevoice}`，已生成字幕在 `subtitles/`，安装下载在 `downloads/`，安装记录与私人配置备份在 `state/`。不要整体清空此根目录；`subtitles/` 是用户生成结果，不是可随意丢弃的下载暂存。
+
+已有 Whisper 和 Qwen 源环境及其 `local.conf` 路径时执行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/setup-ai-subtitles.ps1
+# 推理验收后，才注册新路径；迁移旧缓存会保留原目录
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/setup-ai-subtitles.ps1 -ConfigureLocal
+```
+
+该入口复制并逐文件核对现有 Whisper、Qwen 及已生成字幕，拒绝覆盖不同内容的文件；Qwen 按实际 Python 基础环境和依赖重建独立的可迁移 Python，不直接移动 venv。SenseVoice 使用另一份独立环境，安装固定 `funasr==1.4.16`、与 PyTorch 2.8.0 配套的 torchaudio；不会修改旧环境或 VS Python。新增模型固定到官方修订并核验权重 SHA-256，不在播放时下载／更新，不执行模型仓库的远程 Python 代码。模型修订变更须更新下载入口并重新验收。
+
+`-ConfigureLocal` 在运行时导入检查和模型下载检查通过后，备份并原子更新本机 AI 路径，保留接口密钥及用户调参；实际识别仍须执行下面的播放验收。配置仓库忽略的 `state/ai-runtime.json` 记录路径所有权，原组件安装器的路径修复会保留这些统一管理的 AI 路径；更新后端使用统一入口与新根目录。旧环境、旧字幕缓存均保留。由于后端路径与推理方式改变，部分旧字幕不会自动作为新方案缓存命中，可从备份目录手动加载／导出；不修改旧缓存身份来假装新结果。安装中断保留暂存；确认无安装进程后方可删除 `state/install.lock` 并重试。默认需要在 C 盘准备数十 GB 的复制与下载空间。
+
+全新机器先用现有组件安装入口准备可信的 Whisper/Qwen（见 [组件安装与迁移](config-checks.md#组件安装与迁移)），再运行统一入口；Qwen 也可按下方源环境部署。`-ModelSource modelscope` 对 Qwen 大权重使用官方镜像并核验固定摘要，SenseVoice 仍从固定 Hugging Face 修订下载。统一入口不自动更新／替换已经安装的运行环境；有意升级时使用新的根目录验收，再注册路径。
 
 ## 使用与缓存
 
 - `j` / `k` 选择主/次字幕，`v` / `Alt+V` 控制显示；`Ctrl+r` 重载字幕，`Shift+Backspace` 恢复字幕位置/缩放/时延，不删除缓存。
-- 配置文件为 `script-opts/sub_fastwhisper.conf`，脚本标识 `sub_fastwhisper`。输出统一到 `~~/cache/ai-subtitles/`，不在媒体同级写入；旧 `output_path=source` 也回退到缓存。
+- 配置文件为 `script-opts/sub_fastwhisper.conf`，脚本标识 `sub_fastwhisper`。未安装统一环境时输出到 `~~/cache/ai-subtitles/`；安装注册后由 `local.conf` 指向统一根目录的 `subtitles/`。不在媒体同级写入；旧 `output_path=source` 回退到仓库缓存。
 - AI 字幕默认缩为原来的 80%（`font_scale=0.8`）：原文按当前纯文本字号换算，双语 ASS 的 70/50 改为 56/40，不修改普通字幕的全局字号/缩放。播放使用缓存中的独立 ASS，识别与翻译原始 SRT、导出内容保留。
 - 长句按 UTF-8 字符宽度和标点分屏，双语每种语言一行、总计最多两行；`layout_line_width=56` 按半角计宽，中文约占两格，`layout_max_seconds=6` 控制长段显示时长。拆分时间按文本长度近似分配，不等于逐词对齐；数学公式和快速讲话仍需人工抽查。改排版参数后重新加载即可，无需重新识别或请求翻译。
-- 菜单 **字幕 → 下载／生成 → AI 字幕… → 更多设置… → 识别方案…** 选择 Whisper 或 Qwen；勾选项为当前方案，`Alt+f` 生成所选方案的字幕。任务进行时先取消再切换；切换移除缓存字幕轨并尝试读取新方案的缓存，保留其他字幕轨，不立即开始识别。
+- 菜单 **字幕 → 下载／生成 → AI 字幕… → 更多设置… → 识别方案…** 选择上述五个方案；勾选项为当前方案，`Alt+f` 生成所选方案的字幕。任务进行时先取消再切换；切换移除缓存字幕轨并尝试读取新方案的缓存，保留其他字幕轨，不立即开始识别。
 - 菜单选择跨文件保持，重启播放器恢复配置中的 `backend=whisper`；要长期默认 Qwen，可自行将配置改成 `backend=qwen`。字幕位置/时延重置不改变识别方案。
 - 识别缓存按后端、媒体、音轨和识别设置区分，译文另按原文校验值、接口、模型和目标语言缓存；换接口/语言/排版不重新识别。可核验的旧识别缓存会复制迁移并保留旧目录；未经过全文校准的旧译文保留，不作为当前流程的完成结果复用。完成且有效的 SRT 才能复用；中途结果与完成缓存分开，卸载取消旧任务并隔离旧回调。
 - 本地识别使用任务开始时选择的内置音轨；Whisper 整片模式选择非首路音轨时，先异步提取为临时 PCM，识别后移除。受旧行为影响的非首路缓存使用新标识，不继续复用可能来自首路的旧结果。关闭音轨或选择外挂音轨时会提示重新选择，避免识别错误的来源；网络视频的非首路音轨需先保存为本地视频。
@@ -53,7 +87,7 @@ script-message-to sub_fastwhisper sub-fastwhisper-translation-cancel
 
 已有可信组件包时，可用 `tools/components.cmd` 一并安装 Whisper、Qwen 与媒体工具，并修复迁移路径，见[组件安装与迁移](config-checks.md#组件安装与迁移)。安装器将 Whisper 本地模型目录写入 `sub_fastwhisper-whisper_model_dir`；留空时沿用后端原有查找规则。Qwen 在中文路径下借助 Windows 短路径兼容 DyNet；禁用短文件名的目标卷请使用英文运行时目录。下面的源环境部署仍可单独使用。
 
-适配器为 `tools/runtime/qwen_subtitles.py`，使用 Python 3.12.12、PyTorch 2.8.0+cu128、官方 `qwen-asr==0.0.6` 的 Transformers 后端，CUDA / bfloat16 / SDPA / batch=1。默认每段不超过 20 秒，优先在静音处切分；`qwen_chunk_seconds` 可设为 2–30。先完成识别并释放模型，再加载官方 ForcedAligner 0.6B 校时，避免两模型同时占显存。按对齐时间和标点断句，保留识别标点；它生成原语言字幕，翻译仍沿用现有可选 API。
+适配器为 `tools/runtime/qwen_subtitles.py`，使用 Python 3.12.12、PyTorch 2.8.0+cu128、官方 `qwen-asr==0.0.6` 的 Transformers 后端，CUDA / bfloat16 / SDPA / 默认 batch=2（可设 1–8）。0.6B 与 1.7B 共用适配器；每批只读取必要音频并保留原偏移，默认每段不超过 20 秒，优先在静音处切分；`qwen_chunk_seconds` 可设为 2–30。先完成识别并释放模型，再加载官方 ForcedAligner 0.6B 逐段校时，避免两模型同时占显存。按对齐时间和标点断句，保留识别标点；它生成原语言字幕，翻译仍沿用现有可选 API。
 
 目前 Qwen 接入只支持本地媒体的内置音轨，按 mpv 当前音轨抽取音频；网络媒体可使用 Whisper，外挂音轨需先合并到本地媒体或切换内置音轨。Qwen 自行分片，不使用 Whisper 的 `use_segment` / `segment_duration` / `compute_type` / `model` 选项。生成期间播放其他 GPU 增强会争用显存；显存不足时本次任务失败，不自动换模型或后端。
 
@@ -73,13 +107,44 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/setup-qwen-asr.ps1 -Co
 
 `scripts/sub-fastwhisper.lua` 基于上游脚本，集中缓存模块为 `script-modules/ai-subtitle-cache.lua`。更新上游前比较本地后端分派、缓存路径、任务取消、回调隔离和完成判定，不直接覆盖。
 
+### 2026-10-27 方案与迁移验证
+
+本机 RTX 4070 Laptop 8GB，Whisper-XXL r245.4 / large-v3-turbo / CUDA float16；Qwen Transformers / CUDA bfloat16 / batch=2，SenseVoice FunASR 1.4.16 / CUDA float32 / batch=4。以下单次对照每组独立进程，包含启动、Python 导入、模型加载、识别和必要对齐；不清空系统文件缓存，不作为其他机器或片源的速度承诺。
+
+同一份 183.4 秒、1280×720/22fps 中文数学课程切片（字幕只处理音轨）：
+
+| 方案 | 总耗时 | 时间轴结构检查 |
+| --- | --- | --- |
+| Whisper 普通推理 | 18.08 秒 | 通过 |
+| Whisper batch=4 | 12.53 秒 | 通过 |
+| SenseVoiceSmall + CTC 校时 | 44.73 秒 | 通过 |
+| Qwen 0.6B + ForcedAligner | 73.61 秒 | 通过 |
+| Qwen 1.7B + ForcedAligner | 83.56 秒 | 通过 |
+
+SenseVoice 的模型内计时为 9.03 秒，但从启动进程到退出是 44.73 秒；Python 冷启动与首次导入不可从用户等待时间中省略。该片段上 SenseVoice/Qwen 不是更快的默认替代品，保留为效果与显存取舍的选项；PyTorch 峰值已分配显存分别约 1428、1919、4481 MiB，不等于整机总显存占用。
+
+另一份 94.59 分钟、1280×720/28fps 中文课程：普通推理 232.92 秒，1733 条有效时间轴；batch=4 为 103.55 秒，但出现 3 条零时长纯标点字幕及少量重叠，未通过时间轴检查。故默认保留普通推理；速度档输出无效时不提交完成缓存，并提示切回普通推理，不删除标点来掩盖异常、不静默换模型。外部专业字幕仍允许有意重叠，不应用生成结果的单轨时间轴限制。
+
+上述源视频 SHA-256、大小和修改时间保持不变；没有人工逐字稿，不据此给出课程识别准确率。原始对照见忽略的 `cache/asr-compare-20261027/{short,long}-report.json`。SenseVoice/Qwen 轻量版的真实菜单、主动取消、生成中换片、再次生成、显示、重复打开与缓存复用通过，报告分别为 `cache/asr-playback-20261027-134111/` 与 `cache/asr-playback-20261027-134353/`；均无本次遗留后端进程。旧的下方报告仅作历史基线。
+
+统一目录注册后的默认 Whisper 最终回归为 `cache/asr-playback-20261027-135022/`，三次生成、管理菜单、原生按键重置、明确路径导出、取消／换片、显示与复用通过，截图已目视检查，无遗留后端进程。224 项字幕断言、31 项界面、15 项 Python 适配器、3 项迁移和 32 项组件检查通过；配置引用／原生命令检查为 0 错误、0 警告。安装入口在新目录重复执行通过，实际本机私人接口与非路径调参保持原值，旧环境保留。
+
+另以 SenseVoice 官方固定模型修订下的 `example/ja.mp3`（约 7.2 秒）测试 Whisper 普通推理、SenseVoice、Qwen 0.6B，三者均输出有效日语时间轴；报告为 `cache/asr-compare-20261027/japanese-report.json`。这只验证日语短样例的本地识别／校时链路，不代表真实日语长片、电影对白、混合语种或翻译质量已验收。
+
 验收命令：
 
 ```powershell
 python tools/tests/test_qwen_asr.py
+python tools/tests/test_ai_runtime.py
 python tools/tests/test_ai_subtitles_mock.py
 python tools/tests/test_ai_subtitles.py --full-config
 python tools/tests/test_ai_subtitles.py --full-config --engine qwen --menu-switch
+python tools/tests/test_ai_subtitles.py --full-config --engine qwen-small
+python tools/tests/test_ai_subtitles.py --full-config --engine sensevoice
+python tools/tests/test_ai_subtitles.py --full-config --engine qwen-small --menu-switch --cancel-recognition --long-speech --render
+# 对照批量速度档；默认测试走普通推理
+python tools/tests/test_ai_subtitles.py --full-config --whisper-mode balanced --long-speech --render
+# 注册前用 --runtime-root 指向已准备的统一目录，不改变本机路径
 python tools/tests/test_ai_subtitles.py --full-config --management
 python tools/tests/test_ai_subtitles.py --full-config --segment --render
 python tools/tests/test_ai_subtitles.py --full-config --segment --fixed-segments --render

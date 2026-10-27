@@ -6,9 +6,12 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 import sys
+import tempfile
+import wave
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'runtime'))
-from qwen_subtitles import chunks, language_name, stamp, timed_cues
+from qwen_subtitles import chunks, language_name, stamp, timed_cues, speech_batches, write_srt
+from sensevoice_subtitles import decode_result
 import qwen_runtime
 
 
@@ -77,6 +80,40 @@ class AdapterTests(unittest.TestCase):
 
     def test_timestamp_rounding_carries(self):
         self.assertEqual(stamp(59.9999), '00:01:00,000')
+
+    def test_batched_audio_preserves_offsets_and_skips_silence(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'audio.wav'
+            with wave.open(str(source), 'wb') as audio:
+                audio.setparams((1, 2, 16000, 0, 'NONE', 'not compressed'))
+                audio.writeframes(b'\0\0' * 16000 + b'\0\x10' * 32000)
+            with wave.open(str(source)) as audio:
+                batches = list(speech_batches(audio, [(0,1),(1,2),(2,3)], 2))
+            self.assertEqual([[(start,end) for start,end,_ in batch] for batch in batches], [[(1,2),(2,3)]])
+            self.assertEqual(len(batches[0][0][2]), 16000)
+
+    def test_bad_or_empty_output_cannot_replace_existing_subtitle(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'saved.srt'
+            path.write_text('previous', encoding='utf-8')
+            for cues in ([], [(float('nan'),1,'bad')], [(2,1,'bad')], [(0,1,'')]):
+                with self.assertRaises(RuntimeError):
+                    write_srt(path, cues, 3)
+                self.assertEqual(path.read_text(encoding='utf-8'), 'previous')
+
+    def test_sensevoice_tags_and_millisecond_timestamps(self):
+        text, words, languages = decode_result(dict(text='<|zh|><|NEUTRAL|><|Speech|><|withitn|>你好。',
+            words=['你','好'], timestamp=[[100,300],[300,600]]))
+        self.assertEqual(text, '你好。')
+        self.assertEqual(languages, {'zh'})
+        self.assertEqual(timed_cues(text, words, 20, 2, 100), [(20.1,20.6,'你好。')])
+
+    def test_sensevoice_missing_timestamps_and_legacy_format_fail(self):
+        with self.assertRaises(RuntimeError):
+            decode_result(dict(text='hello'))
+        with self.assertRaises(RuntimeError):
+            decode_result(dict(text='hello',words=['hello'],timestamp=[['hello',0,1]]))
+        self.assertEqual(decode_result(dict(text='<|nospeech|>'))[0], '')
 
 
 if __name__ == '__main__':

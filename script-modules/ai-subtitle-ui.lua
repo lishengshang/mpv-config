@@ -100,6 +100,8 @@ function M.new(host, refresh)
             add('back', '返回 AI 字幕', 'sub-fastwhisper-manager')
             add('backend', '识别方案：' .. (view.backend or 'Whisper') .. '…', 'sub-fastwhisper-backend-menu', not busy,
                 busy and '请先取消当前任务' or nil)
+            add('language', '原声语言：' .. (view.language or '自动检测') .. '…', 'sub-fastwhisper-language-menu', not busy,
+                busy and '请先取消当前任务' or '自动检测或指定中／英／日等语种')
             add('auto', '自动翻译：' .. (view.auto_translate == 'foreign' and '日语等语种' or '关闭'),
                 'sub-fastwhisper-auto-translate-toggle', true, '中文、英语不自动翻译；仅影响后续任务')
             add('regenerate', '重新生成原文字幕', 'sub-fastwhisper-regenerate', view.media and not busy,
@@ -130,6 +132,10 @@ function M.new(host, refresh)
                 add('cancel', '取消任务', 'sub-fastwhisper-translation-cancel')
             elseif busy then add('cancel', '取消任务', 'sub-fastwhisper-cancel', true, '已完成字幕会保留')
             else
+                if view.media then
+                    add('existing', '使用已有／网上字幕…', 'sub-fastwhisper-existing', true,
+                        view.existing_subtitles and '当前已有字幕轨，可先选择使用' or '选择、加载本地字幕或搜索下载')
+                end
                 if report and report.state == 'failed' then
                     add('retry', '重试校准／翻译', 'sub-fastwhisper-translate-resume', true, '使用 API；已完成部分不会重复请求')
                 end

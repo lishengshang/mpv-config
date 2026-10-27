@@ -1,6 +1,6 @@
 -- Real mpv routing, subtitle loading, next-file, reset and persistent reuse.
 local utils = require 'mp.utils'
-local o = {root = '', first = '', second = '', timeout = 180, menu_switch = false, management = false, segment = false, render = false}
+local o = {root = '', first = '', second = '', timeout = 180, menu_switch = false, preset='qwen-quality', management = false, segment = false, render = false, cancel_recognition=false}
 require('mp.options').read_options(o, 'asr-playback')
 package.path = mp.command_native({'expand-path', '~~/script-modules/?.lua'}) .. ';' .. package.path
 local cache = require 'ai-subtitle-cache'
@@ -9,6 +9,7 @@ local started = mp.get_time()
 local job_started, cancel_sent, partial_path
 local metrics = {}
 local screenshot_pending = false
+local menu_steps = 0
 local function generate(next_phase)
     phase, job_started = next_phase, mp.get_time()
     mp.commandv('keypress', 'ALT+f')
@@ -23,12 +24,22 @@ local function capture_subtitles(path, name)
     end
     check(first and last, 'screenshot requires a timed subtitle')
     local target = (seconds(first) + seconds(last)) / 2
+    -- Playback ASS can split one SRT cue. Its midpoint may land exactly on a
+    -- display-event boundary, so capture the middle of an actual display cue.
+    local ass = cache.read(path:gsub('%.srt$', '.ai.ass')) or ''
+    local a, b = ass:match('Dialogue: %d+,(%d+:%d%d:%d%d%.%d+),(%d+:%d%d:%d%d%.%d+),')
+    local function ass_seconds(value)
+        local h,m,s = value:match('(%d+):(%d+):([%d.]+)')
+        return h * 3600 + m * 60 + s
+    end
+    if a and b then target = (ass_seconds(a) + ass_seconds(b)) / 2 end
     mp.commandv('seek', target, 'absolute+exact')
     screenshot_pending = true
     local deadline = mp.get_time() + 10
     local function capture()
         local ok, err = pcall(function()
-            check(mp.get_time() < deadline, 'subtitle screenshot timed out')
+            check(mp.get_time() < deadline, string.format('subtitle screenshot timed out: target=%.3f position=%.3f sid=%s text=%s',
+                target, mp.get_property_number('time-pos', -1), mp.get_property('sid', 'no'), mp.get_property('sub-text', '')))
             if math.abs(mp.get_property_number('time-pos', -1) - target) > 0.15 or
                 mp.get_property('sub-text', '') == '' then
                 mp.add_timeout(0.1, capture)
@@ -83,7 +94,7 @@ mp.register_event('file-loaded', function()
                 phase = 90
                 mp.commandv('script-message-to', 'sub_fastwhisper', 'sub-fastwhisper-backend-menu')
             else
-                generate(1)
+                generate(o.cancel_recognition and 80 or 1)
             end
         elseif phase == 12 then
             check(not cached_track(), 'next file does not inherit prior subtitle')
@@ -96,6 +107,13 @@ mp.register_event('file-loaded', function()
             metrics.next_file_cancelled = true
             phase = 104
         elseif phase == 105 then generate(1)
+        elseif phase == 84 then
+            check(not cached_track(), 'next-file cancellation leaves no generated subtitle track')
+            check(not mp.get_property_native('user-data/ai-subtitles/status/running'), 'next-file cancellation stops real backend')
+            metrics.recognition_next_file_cancelled = true
+            phase = 85
+            mp.commandv('loadfile', o.first, 'replace')
+        elseif phase == 85 then generate(1)
         end
     end)
     if not ok then mp.msg.error('ASR CACHE PLAYBACK FAIL: ' .. tostring(err)); mp.commandv('quit', '3') end
@@ -140,13 +158,30 @@ mp.add_periodic_timer(0.15, function()
             phase, previous = 94, mp.get_time()
         elseif phase == 94 and mp.get_time() - previous > 0.3 then
             phase, previous = 91, mp.get_time()
-            mp.commandv('keypress', 'END')
+            for index, choice in ipairs(require('ai-asr-presets').choices) do
+                if choice.id == o.preset then menu_steps = index end
+            end
+            check(menu_steps > 0, 'requested preset exists')
+            mp.commandv('keypress', 'HOME')
         elseif phase == 91 and mp.get_time() - previous > 0.3 then
-            phase = 92
-            mp.commandv('keypress', 'ENTER')
-        elseif phase == 92 and mp.get_property_native('user-data/ai-subtitles/backend') == 'qwen' then
+            previous = mp.get_time()
+            if menu_steps > 0 then mp.commandv('keypress', 'DOWN'); menu_steps = menu_steps - 1
+            else phase = 92; mp.commandv('keypress', 'ENTER') end
+        elseif phase == 92 and mp.get_property_native('user-data/ai-subtitles/status/preset') == o.preset then
+            if o.render then mp.commandv('screenshot-to-file', o.root .. '/preset.png', 'window') end
             mp.commandv('keypress', 'ESC')
-            generate(1)
+            generate(o.cancel_recognition and 80 or 1)
+        elseif phase == 80 and mp.get_property_native('user-data/ai-subtitles/status/running') and mp.get_time()-job_started > 1 then
+            mp.commandv('script-message-to', 'sub_fastwhisper', 'sub-fastwhisper-cancel')
+            phase, previous = 81, mp.get_time()
+        elseif phase == 81 and mp.get_time()-previous > 0.5 then
+            check(not mp.get_property_native('user-data/ai-subtitles/status/running'), 'explicit cancellation stops real backend')
+            check(not cached_track(), 'cancelled real job cannot publish completed subtitles')
+            metrics.recognition_cancelled = true
+            generate(83)
+        elseif phase == 83 and mp.get_property_native('user-data/ai-subtitles/status/running') and mp.get_time()-job_started > 1 then
+            phase = 84
+            mp.commandv('loadfile', o.second, 'replace')
         elseif phase == 1 and result then
             metrics.first_total_seconds = mp.get_time() - job_started
             metrics.media_duration = mp.get_property_number('duration')
@@ -211,6 +246,8 @@ mp.add_periodic_timer(0.15, function()
         elseif phase == 713 and mp.get_time() - previous > 0.2 then
             mp.commandv('keypress', 'DOWN'); phase, previous = 714, mp.get_time()
         elseif phase == 714 and mp.get_time() - previous > 0.2 then
+            mp.commandv('keypress', 'DOWN'); phase, previous = 715, mp.get_time()
+        elseif phase == 715 and mp.get_time() - previous > 0.2 then
             mp.commandv('keypress', 'DOWN'); phase, previous = 72, mp.get_time()
         elseif phase == 72 and mp.get_time() - previous > 0.2 then
             mp.commandv('keypress', 'ENTER'); phase = 73
