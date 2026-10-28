@@ -74,7 +74,7 @@ GitHub Actions 的 `Weekly upstream pull request` 每周一北京时间 10:17 �
 
 ## CI 与验收
 
-Windows workflow `.github/workflows/config-check.yml` 在 `dev`/`master` push、PR 或手动触发时运行 Python 3.12：
+Windows/Ubuntu workflow `.github/workflows/config-check.yml` 在 `dev`/`master` push、PR 或手动触发时运行 Python 3.12：
 
 ```powershell
 python tools/tests/test_check_config.py ReferenceChecks WiringChecks
