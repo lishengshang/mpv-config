@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from components import CONFIG, local_settings, qwen_files, walk
@@ -114,9 +115,10 @@ def configure(root):
             raise RuntimeError('Model missing: ' + key + '; local.conf was not changed')
     local = CONFIG / 'local.conf'
     text = local.read_text(encoding='utf-8-sig') if local.is_file() else ''
-    backup = root / 'state' / ('local-' + time.strftime('%Y%m%d-%H%M%S') + '.conf')
+    backup = root / 'state' / ('local-' + time.strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex + '.conf')
     if local.is_file():
-        shutil.copy2(local, backup)
+        with local.open('rb') as source, backup.open('xb') as target_file:
+            shutil.copyfileobj(source, target_file)
     # Only managed AI paths are replaced; private API options and tuning are retained.
     for key, value in target.items():
         text = re.sub(r'^\s*script-opts-append=sub_fastwhisper-' + key + r'=[^\r\n]*\r?\n?', '', text, flags=re.M)

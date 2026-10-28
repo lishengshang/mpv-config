@@ -1,5 +1,6 @@
 """Migration checks: no overwrite, no source removal, private settings retained."""
 import json
+from types import SimpleNamespace
 from pathlib import Path
 import sys
 import tempfile
@@ -53,15 +54,27 @@ class MigrationTests(unittest.TestCase):
                               ('qwen_aligner','config.json'),('sensevoice_model','model.pt')]:
                 paths[key].mkdir(parents=True, exist_ok=True)
                 (paths[key]/name).write_bytes(b'fixture')
-            with patch.object(ai_runtime, 'CONFIG', config):
+            with patch.object(ai_runtime, 'CONFIG', config), patch.object(ai_runtime.time, 'strftime', return_value='20261028-140000'):
+                ai_runtime.configure(root)
+                first_registration = local.read_bytes()
                 ai_runtime.configure(root)
             updated = local.read_text()
             self.assertIn('api_key=fixture-only\n', updated)
             self.assertIn('whisper_batch_size=2\n', updated)
             self.assertEqual(updated.count('sub_fastwhisper-qwen_python='), 1)
             self.assertNotIn('qwen_python=previous', updated)
-            backup = next((root/'state').glob('local-*.conf'))
-            self.assertEqual(backup.read_bytes(), original_bytes)
+            backups = list((root/'state').glob('local-*.conf'))
+            self.assertEqual(len(backups), 2)
+            self.assertCountEqual([backup.read_bytes() for backup in backups], [original_bytes, first_registration])
+            before_collision = local.read_bytes()
+            collision_id = backups[0].stem.rsplit('-', 1)[1]
+            with patch.object(ai_runtime, 'CONFIG', config), \
+                    patch.object(ai_runtime.time, 'strftime', return_value='20261028-140000'), \
+                    patch.object(ai_runtime.uuid, 'uuid4', return_value=SimpleNamespace(hex=collision_id)):
+                with self.assertRaises(FileExistsError):
+                    ai_runtime.configure(root)
+            self.assertEqual(local.read_bytes(), before_collision)
+            self.assertCountEqual([backup.read_bytes() for backup in backups], [original_bytes, first_registration])
             self.assertTrue(json.loads((root/'state/paths.json').read_text())['output_path'].endswith('subtitles'))
 
 
