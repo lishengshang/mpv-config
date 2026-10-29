@@ -246,6 +246,8 @@ local function current_entry(extra)
     end
     if selected_backend == 'whisper' and o.whisper_mode == 'balanced' then
         identity = utils.format_json({'whisper-batched-v1', identity, tostring(o.whisper_batch_size)})
+    elseif selected_backend == 'whisper' and o.whisper_mode == 'fast' then
+        identity = utils.format_json({'whisper-fast-v1', identity, 'beam=1'})
     end
     if selected_backend == 'whisper' and whisper_model_dir ~= '' then
         local model = utils.file_info(utils.join_path(whisper_model_dir, 'faster-whisper-' .. o.model .. '/model.bin')) or {}
@@ -928,6 +930,10 @@ local function fastwhisper_cmd(file_path, sub_path)
     if o.whisper_mode == 'balanced' then
         args[#args + 1] = '--batched'
         args[#args + 1] = '--batch_size'; args[#args + 1] = tostring(o.whisper_batch_size)
+    elseif o.whisper_mode == 'fast' then
+        -- Keep ordinary inference, previous-text context and word alignment.
+        -- Reduced search width is explicit and has a separate completed cache.
+        args[#args + 1] = '--beam_size'; args[#args + 1] = '1'
     end
 
     return args

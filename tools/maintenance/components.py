@@ -133,12 +133,23 @@ def qwen_files(base, site, models, vs, python_version):
         yield from walk(model, 'models/' + model.name + '/')
 
 
+def whisper_files(runtime, models):
+    runtime, models = Path(runtime).resolve(), Path(models).resolve()
+    if not any(models.rglob('model.bin')):
+        raise ValueError('Whisper package lacks offline model')
+    for name, path in walk(runtime):
+        if not name.startswith('_models/'):
+            yield name, path
+    yield from walk(models, '_models/')
+
+
 def export(args):
     settings = local_settings(CONFIG / 'local.conf')
     vs = Path(args.vs_source or CONFIG.parent).resolve()
     whisper = Path(args.whisper_source or settings.get('sub_fastwhisper-fast_whisper_path', '')).resolve()
     if whisper.is_file():
         whisper = whisper.parent
+    whisper_models = Path(settings.get('sub_fastwhisper-whisper_model_dir') or whisper / '_models').resolve()
     qwen_python = Path(args.qwen_python or settings.get('sub_fastwhisper-qwen_python', '')).resolve()
     models = [Path(settings.get('sub_fastwhisper-' + key, '')).resolve() for key in ('qwen_model', 'qwen_aligner')]
     configured_ffmpeg = settings.get('sub_fastwhisper-ffmpeg_path', '')
@@ -148,6 +159,8 @@ def export(args):
     for path in (vs / 'python.exe', whisper / 'faster-whisper-xxl.exe', qwen_python, *[m / 'config.json' for m in models], ffmpeg, ffprobe):
         if not path.is_file():
             raise ValueError('Installed component source missing: ' + str(path))
+    if not any(whisper_models.rglob('model.bin')):
+        raise ValueError('Whisper package lacks offline model')
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     copy_installer(output)
@@ -162,7 +175,7 @@ def export(args):
         raise ValueError('Expected installed Qwen site-packages')
     components = [package('media', [('ffmpeg.exe', ffmpeg), ('ffprobe.exe', ffprobe)], output),
                   package('vs', runtime_files(vs), output, {'kind': 'installed VS snapshot, engine caches excluded'}),
-                  package('whisper', walk(whisper), output, {'kind': 'installed Faster-Whisper-XXL with offline model'}),
+                  package('whisper', whisper_files(whisper, whisper_models), output, {'kind': 'installed Faster-Whisper-XXL with offline model'}),
                   package('qwen', qwen_files(base, site, models, vs, versions['python']), output, versions)]
     # Pick up final installer sources after potentially lengthy runtime compression.
     copy_installer(output)
@@ -320,7 +333,12 @@ def status(args):
         try:
             if kind == 'vs' and kind in receipts and not store.component_launcher(root).is_file():
                 raise ValueError('Component launcher missing; run configure to repair it')
-            health = store.probe(kind, directory)
+            model_dirs = None
+            if kind not in receipts:
+                keys = {'whisper': ('whisper_model_dir',), 'qwen': ('qwen_model', 'qwen_aligner')}.get(kind, ())
+                if keys and all(settings.get('sub_fastwhisper-' + key) for key in keys):
+                    model_dirs = [Path(settings['sub_fastwhisper-' + key]) for key in keys]
+            health = store.probe(kind, directory, model_dirs=model_dirs)
             if args.hashes and kind in receipts:
                 for index, file in enumerate(receipts[kind]['files']):
                     if store.digest(store.inside(directory, file['path'])) != file['sha256']:

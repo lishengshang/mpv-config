@@ -111,6 +111,8 @@ python tools/tests/test_gpu_ux.py --case playback --source-width 640 --shader-ca
 
 ## 历史验证边界
 
+- 2026-10-28，RTX 4070 Laptop 8GB / 驱动 616.92 / mpv `v0.41.0-1017-g02a595ddc`，640×360/30fps 合成源的暂停切换回归通过，覆盖 RIFE、DRBA、ArtCNN 亮度/色度、MIX、用户滤镜保留与下一文件；7 张预期截图通过 PNG 内容检查。报告为 `cache/gpu-ux/20261028-231802-playback-paused-focused-640/report.json`，不作为真实片源性能或全部预设验收；新课程的默认/Bilateral 采样见 [配置检查](config-checks.md#统一诊断与播放采样)。
+
 2026-10-19 本机 RTX 4070 Laptop 8GB / 驱动 616.92 / mpv `v0.41.0-1017-g02a595ddc`：640×360/30fps 合成测试图、1280×720 窗口、D3D11、只加载 uosc/GPU 控制器/测试脚本，完成 12 个 RTX VS 与两个 ArtCNN shader 的完整序列：
 
 - 首轮旧工具仅检查 PNG 格式和大小，误将 MIX 暂停黑帧判为通过，原报告 `cache/gpu-ux/20261019-132029-playback-paused-640/` 不计验收。日志显示 VS 初始化返回零时长占位黑帧；单纯等待和同位置 seek 仍黑，补取一帧恢复，原始对照在 `cache/gpu-mix-paused-probe/`。本轮控制器修复和 PNG 内容检查见上方机制说明。

@@ -130,6 +130,10 @@ python tools/tests/test_release.py
 
 ## 组件安装与迁移
 
+统一 AI 目录中的模型与运行时分开保存。组件 `export` 会读取 `local.conf` 的 `sub_fastwhisper-whisper_model_dir`，将该目录放入 Whisper 包的 `_models/`，不混入运行时旁旧模型；缺模型时停止导出。未托管环境的 `status` 按已配置的 Whisper/Qwen 模型路径检查，已安装组件仍只验收包内模型。当前组件清单仅支持 VS、媒体工具、Whisper 和 Qwen 1.7B/对齐器，尚不部署 SenseVoice 或 Qwen 0.6B；统一安装入口仍见 [AI 字幕](ai-subtitles.md#统一安装与目录)。
+
+2026-10-28 本机验证：组件离线回归 38 项通过，统一目录中的 Whisper/Qwen 原生诊断通过；从统一 Whisper 运行时与独立模型导出 5125 个文件的私有包。在公开 r2 播放器的独立副本中，以系统 PATH/PowerShell 模块路径、离线模型环境、无初始 Python 完成引导安装；媒体/Whisper 共 5127 个文件 SHA256 通过。目录迁移后修复路径，英文合成语音的三次生成、两次复用、管理/明确导出/渲染、退出和无遗留后端检查通过，配置保留标记仍在；截图已目视检查。汇总为 `cache/acceptance-20261028/isolated.json`，诊断为 `cache/component-audit/unified-status-20261028.json`。此测试仅覆盖本机隔离目录的媒体/Whisper，驱动与操作系统仍来自本机，不能称为干净机器或全组件验收。首次继承模块路径的失败日志另存于 `isolated-install-inherited-modules.log`；来源盘点在 `cache/acceptance-20261028/provenance.json`，私有包不作为公开发行资产。
+
 双击 `tools/components.cmd`，选择检查、安装或修复迁移路径。安装时选择可信离线包中的 `catalog.json`；也支持 HTTPS 清单。播放器目录必须已有 `mpv.exe` 与当前版本的 `portable_config`，工具不替换播放器或公共配置。命令行示例：
 
 ```powershell
@@ -246,3 +250,5 @@ python tools/tests/test_player_health.py
 | Bilateral | 4.278 / 4.766 | 1.001284 | 0 / 0 / 0 |
 
 两组采样有效、退出码 0、无错误级日志，截图已目视检查；原文件大小/修改时间/SHA256 和同级目录列表不变。汇总为 `cache/player-health/course-baseline-20261019/summary.json`，原报告分别为 `benchmark-20261019-140635-044113/report.json` 与 `benchmark-20261019-140710-689551/report.json`。VO 数据不包含完整 VS/解码流水线；该静态板书课程的单次短采样不代表电影、1080p/4K、其他重型预设、音画同步或主观画质结论。
+
+2026-10-28 同机、同驱动和上述日常播放器，以用户指定的 720p/22fps H.264《9.6 空间第二类曲线积分的计算》从 60 秒处分别定位，预热 2 秒后各采样 30 秒。保持上述根配置、shader、1280×720 窗口、D3D11/`d3d11va-copy` 和关闭音频条件，默认/Bilateral 两组采样有效，三项掉帧/延迟增量均为 0，截图已目视检查；VO P50/P95 分别为 6.065/6.282 ms 与 5.409/5.541 ms，单次测量不用于性能排名。报告为 `cache/player-health/benchmark-20261028-231625-239027/` 与 `benchmark-20261028-231700-396149/`。1080p/2160p 合成源各 5 秒冒烟通过（`benchmark-20261028-231737-494607/`、`benchmark-20261028-231748-545956/`），不替代真实高分辨率片源验收。课程源文件哈希保持不变，总表见 `cache/acceptance-20261028/validation.json`。

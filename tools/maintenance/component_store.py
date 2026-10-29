@@ -254,7 +254,7 @@ def checked(command, cwd, timeout=90):
     return output
 
 
-def probe(kind, directory):
+def probe(kind, directory, *, model_dirs=None):
     directory = Path(directory).resolve()
     if kind == 'vs':
         code = ('import json,sys,pathlib,importlib.metadata as m; import vapoursynth as vs,k7sfunc; '
@@ -283,14 +283,16 @@ def probe(kind, directory):
                 'print("COMPONENT_PROBE_OK "+json.dumps({"python":sys.version.split()[0],"torch":torch.__version__,"cuda":torch.cuda.get_device_name(),"portable":sys.prefix==sys.base_prefix}))')
         output = checked([python, '-I', '-c', code], directory, 180)
         models = directory.parent / 'models' if legacy else directory / 'models'
-        for folder in ('Qwen3-ASR-1.7B', 'Qwen3-ForcedAligner-0.6B'):
-            if not (models / folder / 'config.json').is_file():
+        for model in (model_dirs if model_dirs is not None else
+                      [models / folder for folder in ('Qwen3-ASR-1.7B', 'Qwen3-ForcedAligner-0.6B')]):
+            if not (Path(model) / 'config.json').is_file():
                 raise ValueError('Qwen local model is missing')
     elif kind == 'whisper':
         output = checked([directory / 'faster-whisper-xxl.exe', '--help'], directory)
         if not all(flag in output for flag in ('--model', '--model_dir', '--compute_type')):
             raise ValueError('Whisper help did not confirm required options')
-        if not any((directory / '_models').rglob('model.bin')):
+        models = Path(model_dirs[0]) if model_dirs is not None else directory / '_models'
+        if not any(models.rglob('model.bin')):
             raise ValueError('Whisper package lacks offline model')
         return {'kind': 'CLI/model presence', 'inference_verified': False}
     else:

@@ -20,6 +20,98 @@ import components
 
 
 class ComponentTests(unittest.TestCase):
+    def test_whisper_export_includes_separate_models_without_old_duplicates(self):
+        runtime, models = self.base / 'whisper', self.base / 'models'
+        (runtime / '_models/old').mkdir(parents=True)
+        (runtime / 'faster-whisper-xxl.exe').write_bytes(b'backend')
+        (runtime / '_models/old/model.bin').write_bytes(b'stale model')
+        (models / 'turbo').mkdir(parents=True)
+        (models / 'turbo/model.bin').write_bytes(b'current model')
+        files = dict(components.whisper_files(runtime, models))
+        self.assertEqual(files['_models/turbo/model.bin'].read_bytes(), b'current model')
+        self.assertIn('faster-whisper-xxl.exe', files)
+        self.assertNotIn('_models/old/model.bin', files)
+        with self.assertRaisesRegex(ValueError, 'offline model'):
+            list(components.whisper_files(runtime, self.base / 'missing'))
+
+    def test_whisper_probe_uses_explicit_model_directory(self):
+        runtime, models = self.base / 'whisper', self.base / 'models'
+        runtime.mkdir()
+        (models / 'turbo').mkdir(parents=True)
+        (models / 'turbo/model.bin').write_bytes(b'model')
+        with patch.object(store, 'checked', return_value='--model --model_dir --compute_type'):
+            self.assertFalse(store.probe('whisper', runtime, model_dirs=[models])['inference_verified'])
+            with self.assertRaisesRegex(ValueError, 'offline model'):
+                store.probe('whisper', runtime)
+
+    def test_whisper_export_retains_embedded_model_layout(self):
+        runtime = self.base / 'whisper'
+        (runtime / '_models/turbo').mkdir(parents=True)
+        (runtime / '_models/turbo/model.bin').write_bytes(b'model')
+        (runtime / 'faster-whisper-xxl.exe').write_bytes(b'backend')
+        files = dict(components.whisper_files(runtime, runtime / '_models'))
+        self.assertEqual(sorted(files), ['_models/turbo/model.bin', 'faster-whisper-xxl.exe'])
+
+    def test_export_catalog_carries_configured_whisper_model(self):
+        vs, whisper, models, qwen = [self.base / name for name in ('vs', 'whisper', 'models', 'qwen')]
+        for folder in (vs, whisper, models, qwen / 'Lib/site-packages'):
+            folder.mkdir(parents=True)
+        for path in (vs / 'python.exe', whisper / 'faster-whisper-xxl.exe',
+                     qwen / 'python.exe', vs / 'ffmpeg.exe', vs / 'ffprobe.exe'):
+            path.write_bytes(b'fixture executable')
+        (models / 'model.bin').write_bytes(b'external model')
+        config = self.root / 'portable_config'
+        settings = {'whisper_model_dir': models, 'qwen_model': self.base / 'asr',
+                    'qwen_aligner': self.base / 'aligner'}
+        for model in (settings['qwen_model'], settings['qwen_aligner']):
+            model.mkdir()
+            (model / 'config.json').write_text('{}')
+        (config / 'local.conf').write_text(''.join('script-opts-append=sub_fastwhisper-' + k + '=' + v.as_posix() + '\n'
+                                                  for k, v in settings.items()))
+        args = SimpleNamespace(vs_source=vs, whisper_source=whisper, qwen_python=qwen / 'python.exe',
+                               ffmpeg=vs / 'ffmpeg.exe', ffprobe=vs / 'ffprobe.exe', output=self.base / 'exported')
+        info = SimpleNamespace(stdout=json.dumps(dict(base=str(qwen), prefix=str(qwen), python='3.12.12')))
+        with patch.object(components, 'CONFIG', config), patch.object(components, 'copy_installer'), \
+                patch.object(components.subprocess, 'run', return_value=info):
+            components.export(args)
+            catalog = json.loads((args.output / 'catalog.json').read_text())
+            item = next(i for i in catalog['components'] if i['id'] == 'whisper')
+            with zipfile.ZipFile(args.output / item['archive']) as archive:
+                self.assertEqual(archive.read('payload/_models/model.bin'), b'external model')
+            (models / 'model.bin').unlink()
+            args.output = self.base / 'incomplete-export'
+            with self.assertRaisesRegex(ValueError, 'offline model'):
+                components.export(args)
+            self.assertFalse(args.output.exists())
+
+    def test_status_external_models_do_not_bypass_managed_receipt(self):
+        local = self.root / 'portable_config/local.conf'
+        models = self.base / 'external-models'
+        local.write_text('script-opts-append=sub_fastwhisper-whisper_model_dir=' + models.as_posix() + '\n')
+        args = SimpleNamespace(mpv_root=self.root, components=['whisper'], report=None, hashes=False)
+        receipt = dict(id='whisper', root=str(self.root / 'managed'))
+        with patch.object(components, 'installed', return_value=[]), \
+                patch.object(store, 'probe', return_value={}) as probe:
+            self.assertEqual(components.status(args), 0)
+            self.assertEqual(probe.call_args.kwargs['model_dirs'], [models])
+        with patch.object(components, 'installed', return_value=[receipt]), \
+                patch.object(store, 'probe', return_value={}) as probe:
+            self.assertEqual(components.status(args), 0)
+            self.assertIsNone(probe.call_args.kwargs['model_dirs'])
+
+    def test_qwen_probe_uses_configured_external_models(self):
+        runtime = self.base / 'qwen'
+        (runtime / 'python').mkdir(parents=True)
+        (runtime / 'python/python.exe').write_bytes(b'python')
+        models = [self.base / 'models' / name for name in ('asr', 'aligner')]
+        for model in models:
+            model.mkdir(parents=True)
+            (model / 'config.json').write_text('{}')
+        with patch.object(store, 'checked', return_value='COMPONENT_PROBE_OK {"ready":true}'):
+            store.probe('qwen', runtime, model_dirs=models)
+            with self.assertRaisesRegex(ValueError, 'model is missing'):
+                store.probe('qwen', runtime)
+
     def test_component_repair_preserves_registered_unified_ai_paths(self):
         local = self.root / 'portable_config/local.conf'
         original = 'script-opts-append=sub_fastwhisper-fast_whisper_path=C:/AI/runtimes/whisper/faster-whisper-xxl.exe\n'

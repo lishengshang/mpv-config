@@ -2,6 +2,7 @@
 local M = {}
 M.choices = {
     {id='whisper-context', backend='whisper', mode='context', title='Whisper · 多语言均衡', hint='默认 · 连贯优先；中英日语、课程与影视'},
+    {id='whisper-fast', backend='whisper', mode='fast', title='Whisper · 连贯提速', hint='保留上下文与逐词校时；文字可能变化，建议抽查'},
     {id='whisper-balanced', backend='whisper', mode='balanced', title='Whisper · 批量提速', hint='可选速度档；长片可能出现无效时间轴，保留逐词校时'},
     {id='sensevoice', backend='sensevoice', title='SenseVoice · 中文课程', hint='中英粤日韩；轻量识别与 CTC 时间轴'},
     {id='qwen-small', backend='qwen', mode='small', title='Qwen · 轻量 0.6B', hint='多语言；批量识别后单独校时'},
@@ -27,7 +28,9 @@ function M.validate(options, backend)
         return type(value) == 'number' and value == math.floor(value) and value >= low and value <= high
     end
     if backend == 'whisper' then
-        if options.whisper_mode ~= 'balanced' and options.whisper_mode ~= 'context' then return 'Whisper 模式应为 balanced 或 context' end
+        if options.whisper_mode ~= 'balanced' and options.whisper_mode ~= 'context' and options.whisper_mode ~= 'fast' then
+            return 'Whisper 模式应为 context、fast 或 balanced'
+        end
         if not integer(options.whisper_batch_size, 1, 32) then return 'Whisper batch 应为 1–32 的整数' end
     elseif backend == 'qwen' then
         if options.qwen_variant ~= 'quality' and options.qwen_variant ~= 'small' then return 'Qwen 型号应为 quality 或 small' end

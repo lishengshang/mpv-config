@@ -226,7 +226,7 @@ mp.add_periodic_timer(0.15, function()
                 return
             end
             if o.menu_switch then
-                mp.commandv('script-message-to', 'sub_fastwhisper', 'sub-fastwhisper-backend', 'whisper')
+                mp.commandv('script-message-to', 'sub_fastwhisper', 'sub-fastwhisper-preset', 'whisper-context')
                 phase = 93
                 return
             end
@@ -262,12 +262,13 @@ mp.add_periodic_timer(0.15, function()
             check(cache.read(o.root .. '/selected-export.srt') == cache.read(first_result), 'explicit export matches completed result')
             clean_media_folder(o.first); clean_media_folder(o.second)
             mp.commandv('keypress', 'ESC')
-            if o.menu_switch then mp.commandv('script-message-to', 'sub_fastwhisper', 'sub-fastwhisper-backend', 'whisper') end
+            if o.menu_switch then mp.commandv('script-message-to', 'sub_fastwhisper', 'sub-fastwhisper-preset', 'whisper-context') end
             phase = 93
         elseif phase == 93 then
             if o.menu_switch then
                 check(mp.get_property_native('user-data/ai-subtitles/backend') == 'whisper', 'restored default engine')
-                check(not cached_track(), 'Qwen subtitle removed on switch back')
+                check(mp.get_property_native('user-data/ai-subtitles/status/preset') == 'whisper-context', 'restored default Whisper search mode')
+                check(not cached_track(), 'generated subtitle removed on switch back to default')
             end
             check(cache.write(utils.join_path(o.root, 'playback.json'), utils.format_json({
                 first = first_result, second = second_result, menu_switch = o.menu_switch, metrics = metrics, passed = true}) .. '\n'), 'write report')

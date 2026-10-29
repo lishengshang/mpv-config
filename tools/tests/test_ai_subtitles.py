@@ -66,7 +66,7 @@ def main():
     parser.add_argument('--backend', type=Path)
     parser.add_argument('--engine', choices=['whisper', 'qwen', 'qwen-small', 'sensevoice'], default='whisper')
     parser.add_argument('--runtime-root', type=Path, help='Test prepared components before changing local.conf')
-    parser.add_argument('--whisper-mode', choices=['balanced', 'context'], default='context')
+    parser.add_argument('--whisper-mode', choices=['balanced', 'context', 'fast'], default='context')
     parser.add_argument('--cancel-recognition', action='store_true', help='Cancel and switch files during real recognition before the normal lifecycle checks')
     parser.add_argument('--menu-switch', action='store_true', help='Select the requested alternative through uosc keys and restore Whisper')
     parser.add_argument('--full-config', action='store_true', help='Load actual root configuration with only the two test scripts')
@@ -79,8 +79,6 @@ def main():
     parser.add_argument('--language', help='Recognition language (defaults to en for synthetic speech, auto for real media)')
     parser.add_argument('--timeout', type=int, default=600, help='Playback test timeout in seconds, including all generations')
     args = parser.parse_args()
-    if args.menu_switch and args.engine == 'whisper':
-        parser.error('--menu-switch requires an alternative engine')
     if args.segment and (args.engine != 'whisper' or args.management or args.menu_switch):
         parser.error('--segment requires Whisper without management/menu-switch')
     if args.fixed_segments and not args.segment:
@@ -176,7 +174,7 @@ def main():
     real_root.mkdir()
     opts = ['sub_fastwhisper-fast_whisper_path=' + backend.as_posix(),
             'sub_fastwhisper-backend=' + ('whisper' if args.menu_switch else 'qwen' if args.engine == 'qwen-small' else args.engine),
-            'sub_fastwhisper-whisper_mode=' + args.whisper_mode,
+            'sub_fastwhisper-whisper_mode=' + ('context' if args.menu_switch else args.whisper_mode),
             'sub_fastwhisper-model=large-v3-turbo', 'sub_fastwhisper-device=cuda',
             'sub_fastwhisper-compute_type=float16', 'sub_fastwhisper-language=' + language,
             'sub_fastwhisper-api_key=', 'sub_fastwhisper-output_path=' + (real_root / 'results').as_posix(),
@@ -191,7 +189,8 @@ def main():
     opts.append('asr-playback-timeout=' + str(args.timeout))
     if args.menu_switch:
         opts.append('asr-playback-menu_switch=yes')
-        opts.append('asr-playback-preset=' + {'qwen':'qwen-quality','qwen-small':'qwen-small','sensevoice':'sensevoice'}[args.engine])
+        opts.append('asr-playback-preset=' + ('whisper-' + args.whisper_mode if args.engine == 'whisper' else
+                    {'qwen':'qwen-quality','qwen-small':'qwen-small','sensevoice':'sensevoice'}[args.engine]))
     if args.management:
         opts.append('asr-playback-management=yes')
     if args.cancel_recognition:
@@ -249,7 +248,8 @@ def main():
               and not re.search(r'\[(?:e|f)\]', log) and 'Lua error' not in log
               and len(timelines) == 2 and all(t['passed'] for t in timelines) and orphans == []
               and log.count('AI subtitle cache completed:') == expected_jobs
-              and log.count('AI subtitle cache reused:') >= 2)
+              and log.count('AI subtitle cache reused:') >= 2
+              and result.get('menu_switch', False) == args.menu_switch)
     if args.engine != 'whisper':
         marker = 'SENSEVOICE_ASR_OK ' if args.engine == 'sensevoice' else 'QWEN_ASR_OK '
         passed = passed and log.count(marker) == expected_jobs and result.get('menu_switch', False) == args.menu_switch
