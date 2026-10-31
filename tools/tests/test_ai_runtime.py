@@ -35,6 +35,26 @@ class MigrationTests(unittest.TestCase):
                 ai_runtime.configure(Path(folder)/'runtime')
             self.assertEqual(local.read_text(), 'private=keep\n')
 
+    def test_missing_whisper_model_cannot_change_local_configuration(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config, root = Path(folder)/'config', Path(folder)/'runtime'
+            config.mkdir()
+            (root/'state').mkdir(parents=True)
+            local = config/'local.conf'
+            local.write_text('private=keep\n', encoding='utf-8')
+            paths = ai_runtime.paths(root)
+            for key in ('fast_whisper_path','ffmpeg_path','qwen_python','sensevoice_python'):
+                paths[key].parent.mkdir(parents=True, exist_ok=True)
+                paths[key].write_bytes(b'fixture')
+            for key, name in [('qwen_model','config.json'),('qwen_small_model','config.json'),
+                              ('qwen_aligner','config.json'),('sensevoice_model','model.pt')]:
+                paths[key].mkdir(parents=True, exist_ok=True)
+                (paths[key]/name).write_bytes(b'fixture')
+            with patch.object(ai_runtime, 'CONFIG', config), self.assertRaisesRegex(RuntimeError, 'whisper_model_dir'):
+                ai_runtime.configure(root)
+            self.assertEqual(local.read_text(), 'private=keep\n')
+            self.assertEqual(list((root/'state').glob('local-*.conf')), [])
+
     def test_registration_preserves_tuning_and_backs_up_previous_bytes(self):
         with tempfile.TemporaryDirectory() as folder:
             config, root = Path(folder)/'config', Path(folder)/'runtime'
@@ -54,6 +74,8 @@ class MigrationTests(unittest.TestCase):
                               ('qwen_aligner','config.json'),('sensevoice_model','model.pt')]:
                 paths[key].mkdir(parents=True, exist_ok=True)
                 (paths[key]/name).write_bytes(b'fixture')
+            (paths['whisper_model_dir']/'faster-whisper-large-v3-turbo').mkdir(parents=True)
+            (paths['whisper_model_dir']/'faster-whisper-large-v3-turbo/model.bin').write_bytes(b'fixture')
             with patch.object(ai_runtime, 'CONFIG', config), patch.object(ai_runtime.time, 'strftime', return_value='20261028-140000'):
                 ai_runtime.configure(root)
                 first_registration = local.read_bytes()

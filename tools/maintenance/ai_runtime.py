@@ -113,6 +113,8 @@ def configure(root):
                       ('qwen_aligner', 'config.json'), ('sensevoice_model', 'model.pt')]:
         if not (target[key] / name).is_file():
             raise RuntimeError('Model missing: ' + key + '; local.conf was not changed')
+    if not any(target['whisper_model_dir'].rglob('model.bin')):
+        raise RuntimeError('Model missing: whisper_model_dir; local.conf was not changed')
     local = CONFIG / 'local.conf'
     text = local.read_text(encoding='utf-8-sig') if local.is_file() else ''
     backup = root / 'state' / ('local-' + time.strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex + '.conf')
