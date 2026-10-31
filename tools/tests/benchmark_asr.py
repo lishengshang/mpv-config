@@ -4,6 +4,7 @@ import difflib
 import json
 from pathlib import Path
 import re
+import shutil
 import statistics
 import subprocess
 import sys
@@ -19,6 +20,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--media', type=Path, required=True)
     parser.add_argument('--runtime-root', type=Path, required=True)
+    parser.add_argument('--ffprobe', type=Path, help='ffprobe executable; defaults to PATH')
     parser.add_argument('--rounds', type=int, default=2)
     parser.add_argument('--timeout', type=int, default=900)
     parser.add_argument('--language', default='auto')
@@ -31,19 +33,35 @@ def main():
     model = runtime / 'models/whisper/faster-whisper-large-v3-turbo/model.bin'
     if not backend.is_file() or not model.is_file():
         parser.error('Whisper executable and large-v3-turbo model must already exist')
-    duration = float(subprocess.check_output(['ffprobe', '-v', 'error', '-show_entries',
-                     'format=duration', '-of', 'csv=p=0', str(media)], text=True, timeout=30))
+    ffprobe = args.ffprobe or shutil.which('ffprobe')
+    if not ffprobe or not Path(ffprobe).is_file():
+        parser.error('ffprobe not found; pass --ffprobe or add it to PATH')
+    try:
+        duration = float(subprocess.check_output([str(ffprobe), '-v', 'error', '-show_entries',
+                         'format=duration', '-of', 'csv=p=0', str(media)], text=True, timeout=30))
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        parser.error('ffprobe could not read media duration: ' + str(error))
     before = source_snapshot(media)
+    try:
+        version = subprocess.check_output([str(backend), '--version'], text=True, timeout=30).strip()
+    except (OSError, subprocess.SubprocessError) as error:
+        parser.error('Whisper backend version check failed: ' + str(error))
     folder = ROOT / 'cache' / ('asr-speed-' + time.strftime('%Y%m%d-%H%M%S'))
     folder.mkdir(exist_ok=False)
     report = dict(passed=False, media=str(media), duration=duration, source_sha256=before[2],
-                  backend_sha256=file_digest(backend), model_sha256=file_digest(model),
+                  backend_sha256=file_digest(backend), model_sha256=file_digest(model), backend_version=version,
                   model='large-v3-turbo', device='cuda', precision='float16', language=args.language,
                   word_timestamps=True, condition_on_previous_text=True, batched=False, results=[])
-    report['backend_version'] = subprocess.check_output([str(backend), '--version'], text=True, timeout=30).strip()
-    gpu = subprocess.run(['nvidia-smi', '--query-gpu=name,driver_version,memory.total', '--format=csv,noheader'],
-                         capture_output=True, text=True, timeout=15)
-    report['gpu'] = gpu.stdout.strip()
+    report['gpu'] = 'unavailable'
+    smi = shutil.which('nvidia-smi')
+    if smi:
+        try:
+            gpu = subprocess.run([smi, '--query-gpu=name,driver_version,memory.total', '--format=csv,noheader'],
+                                 capture_output=True, text=True, timeout=15)
+            if gpu.returncode == 0 and gpu.stdout.strip():
+                report['gpu'] = gpu.stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
     def save():
         (folder / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
     save()
@@ -59,9 +77,14 @@ def main():
             if args.language != 'auto':
                 command += ['--language', args.language]
             started = time.monotonic()
-            with (output/'backend.log').open('wb') as log:
-                result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=args.timeout,
-                                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            timed_out, exit_code = False, None
+            try:
+                with (output/'backend.log').open('wb') as log:
+                    result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=args.timeout,
+                                            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                exit_code = result.returncode
+            except subprocess.TimeoutExpired:
+                timed_out = True
             elapsed = time.monotonic()-started
             files = list(output.glob('*.srt'))
             timeline = validate_timeline(files[0], duration) if len(files)==1 else dict(passed=False)
@@ -70,13 +93,15 @@ def main():
             words = sum(len(segment.get('words', [])) for segment in data.get('segments', []))
             text = ''.join(re.findall(r'\w', ''.join(c['text'] for c in timeline.get('cues', [])))).lower()
             transcripts[(trial,beam)] = text
-            record = dict(round=trial+1, beam=beam, seconds=round(elapsed,3), exit_code=result.returncode,
+            record = dict(round=trial+1, beam=beam, seconds=round(elapsed,3), exit_code=exit_code, timed_out=timed_out,
                           timeline_valid=timeline['passed'], cues=len(timeline.get('cues', [])),
                           text_characters=len(text), word_timestamps=words, output=str(files[0]) if files else None, command=command)
             report['results'].append(record)
             save()
             print(json.dumps({k:v for k,v in record.items() if k not in ('output','command')}), flush=True)
-            if result.returncode != 0 or not timeline['passed'] or not words:
+            if timed_out:
+                raise SystemExit(f'FAIL: backend exceeded {args.timeout}s; see '+str(folder/'report.json'))
+            if exit_code != 0 or not timeline['passed'] or not words:
                 raise SystemExit('FAIL: backend/timeline; see '+str(folder/'report.json'))
     report['text_comparison'] = [dict(round=i+1, similarity=difflib.SequenceMatcher(None, transcripts[(i,5)],
                                      transcripts[(i,1)], autojunk=False).ratio()) for i in range(args.rounds)]
