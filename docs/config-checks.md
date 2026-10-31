@@ -78,14 +78,17 @@ Windows/Ubuntu workflow `.github/workflows/config-check.yml` 在 `dev`/`master` 
 
 ```powershell
 python tools/tests/test_check_config.py ReferenceChecks WiringChecks
+python tools/tests/test_release.py
 python tools/tests/test_qwen_asr.py
 python tools/tests/test_components.py
+python tools/tests/test_ai_runtime.py
+python tools/tests/test_upstream_sync.py
 python tools/tests/test_gpu_probe.py
 python tools/tests/test_verify_gpu.py
 python tools/maintenance/check_config.py
 ```
 
-CI 运行配置接线、字幕适配、GPU 依赖探针和验收工具失败判定的离线回归；`test_verify_gpu.py` 的两项原生集成在缺少本机 mpv 时跳过。CI 不下载 mpv、VS 或模型，不验证动态 handler、媒体与 GPU。需要原生输入检查时在本机加 `-Mpv`；GPU 产帧用 `tools/verify-gpu.ps1 -Run`。
+CI 运行配置接线、发行打包、字幕／组件／AI 运行时迁移、上游同步、GPU 依赖探针和验收工具失败判定的离线回归；`test_verify_gpu.py` 的两项原生集成在缺少本机 mpv 时跳过。CI 不下载 mpv、VS 或模型，不验证动态 handler、媒体与 GPU。需要原生输入检查时在本机加 `-Mpv`；GPU 产帧用 `tools/verify-gpu.ps1 -Run`。
 
 历史基线 `627414a`、`050a2c7`、`ecd72dd`、`538243e`：31 项本机回归（22 离线、9 原生）通过；远端 workflow 尚未确认。本页不维护随工作区变化的文件数或检查统计。
 
