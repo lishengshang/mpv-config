@@ -32,10 +32,12 @@ class ComponentTests(unittest.TestCase):
         blocked = source / 'blocked'
         blocked.mkdir(parents=True)
         (source / 'visible').write_bytes(b'keep')
+        # walk() resolves its root; Windows temp paths may use an 8.3 alias.
+        blocked = source / '..' / source.name / 'blocked'
         scan = os.scandir
 
         def denied(path):
-            if Path(path) == blocked:
+            if Path(path).resolve() == blocked.resolve():
                 raise PermissionError('fixture: directory access denied')
             return scan(path)
 
