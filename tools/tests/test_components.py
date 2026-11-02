@@ -20,6 +20,54 @@ import components
 
 
 class ComponentTests(unittest.TestCase):
+    def test_walk_rejects_missing_or_non_directory_source(self):
+        file = self.base / 'file'
+        file.write_bytes(b'not a directory')
+        for source in (self.base / 'missing', file):
+            with self.subTest(source=source), self.assertRaisesRegex(ValueError, 'source directory'):
+                list(components.walk(source))
+
+    def test_walk_propagates_unreadable_subdirectory(self):
+        source = self.base / 'source'
+        blocked = source / 'blocked'
+        blocked.mkdir(parents=True)
+        (source / 'visible').write_bytes(b'keep')
+        scan = os.scandir
+
+        def denied(path):
+            if Path(path) == blocked:
+                raise PermissionError('fixture: directory access denied')
+            return scan(path)
+
+        with patch.object(components.os, 'scandir', side_effect=denied):
+            with self.assertRaisesRegex(PermissionError, 'directory access denied'):
+                list(components.walk(source))
+
+    def test_walk_rejects_directory_links_instead_of_omitting_payload(self):
+        source = self.base / 'source'
+        outside = source / 'real'
+        source.mkdir()
+        outside.mkdir()
+        (outside / 'model.bin').write_bytes(b'private model')
+        link = source / 'linked'
+        try:
+            if os.name == 'nt':
+                subprocess.run(['cmd.exe', '/c', 'mklink', '/J', str(link), str(outside)],
+                               check=True, capture_output=True)
+            else:
+                link.symlink_to(outside, target_is_directory=True)
+        except (OSError, subprocess.CalledProcessError):
+            self.skipTest('directory link creation unavailable')
+        try:
+            with self.assertRaisesRegex(ValueError, 'link'):
+                list(components.walk(source))
+            self.assertEqual((outside / 'model.bin').read_bytes(), b'private model')
+        finally:
+            if os.name == 'nt':
+                link.rmdir()
+            else:
+                link.unlink()
+
     def test_whisper_export_includes_separate_models_without_old_duplicates(self):
         runtime, models = self.base / 'whisper', self.base / 'models'
         (runtime / '_models/old').mkdir(parents=True)

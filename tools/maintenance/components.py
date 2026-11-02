@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -30,11 +31,26 @@ def copy_installer(output):
 
 def walk(source, prefix=''):
     source = Path(source).resolve()
-    for parent, directories, names in os.walk(source):
+    if not source.is_dir():
+        raise ValueError('Component source directory missing: ' + str(source))
+
+    def failed(error):
+        raise error
+
+    def check_link(path):
+        info = path.lstat()
+        if (stat.S_ISLNK(info.st_mode) or
+                getattr(info, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0)):
+            raise ValueError('Source contains a link: ' + str(path))
+
+    for parent, directories, names in os.walk(source, onerror=failed):
         directories[:] = sorted(d for d in directories if d not in SKIP_DIRS)
+        for name in directories:
+            check_link(Path(parent) / name)
         for name in sorted(names):
             path = Path(parent) / name
-            if path.is_symlink() or not path.resolve().is_relative_to(source):
+            check_link(path)
+            if not path.resolve().is_relative_to(source):
                 raise ValueError('Source contains a link outside its component')
             if '.engine' in name or '.cache' in name or name.endswith(('.pyc', '.pyo', '.log')):
                 continue
