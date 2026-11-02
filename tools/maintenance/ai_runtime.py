@@ -33,7 +33,13 @@ def copy_verified(source, destination):
     pending.replace(destination)
 
 
+def check_copy_destination(source, destination):
+    if destination.resolve().is_relative_to(source.resolve()):
+        raise ValueError('Migration destination must be outside its source: ' + str(destination))
+
+
 def copy_tree(source, destination):
+    check_copy_destination(source, destination)
     for name, path in walk(source):
         copy_verified(path, destination / name)
 
@@ -46,6 +52,8 @@ def clone_python(source, destination):
             return
     info = json.loads(subprocess.check_output([str(source), '-c',
         'import sys,json; print(json.dumps(dict(base=sys.base_prefix,site=sys.prefix+"/Lib/site-packages",version=sys.version.split()[0])))'], text=True))
+    for key in ('base', 'site'):
+        check_copy_destination(Path(info[key]), destination)
     print('Preparing independent Python: ' + str(destination), flush=True)
     for name, value in qwen_files(Path(info['base']), Path(info['site']), [], CONFIG.parent, info['version']):
         target = destination / name
@@ -87,6 +95,7 @@ def prepare(root, settings):
     if not whisper_source.is_file():
         raise RuntimeError('Configure a trusted Whisper executable first; see docs/ai-subtitles.md')
     if whisper_source.resolve() != target['fast_whisper_path'].resolve():
+        check_copy_destination(whisper_source.parent, root / 'runtimes/whisper')
         for name, source in walk(whisper_source.parent):
             if not name.startswith('_models/'):
                 copy_verified(source, root / 'runtimes/whisper' / name)

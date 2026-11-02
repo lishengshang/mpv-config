@@ -12,6 +12,61 @@ import ai_runtime
 
 
 class MigrationTests(unittest.TestCase):
+    def test_tree_copy_rejects_destination_in_source_before_writing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'source'
+            source.mkdir()
+            (source / 'model.bin').write_bytes(b'original model')
+            for target in (source, source / 'nested'):
+                with self.subTest(target=target), patch.object(ai_runtime, 'copy_verified',
+                        side_effect=AssertionError('copy started before destination validation')):
+                    with self.assertRaisesRegex(ValueError, 'outside its source'):
+                        ai_runtime.copy_tree(source, target)
+            self.assertEqual(list(source.iterdir()), [source / 'model.bin'])
+            self.assertEqual((source / 'model.bin').read_bytes(), b'original model')
+
+    def test_tree_copy_preserves_source_and_nested_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source, target = Path(folder) / 'source', Path(folder) / 'target'
+            (source / 'model').mkdir(parents=True)
+            (source / 'model/weights').write_bytes(b'original weights')
+            ai_runtime.copy_tree(source, target)
+            ai_runtime.copy_tree(source, target)
+            self.assertEqual((target / 'model/weights').read_bytes(), b'original weights')
+            self.assertEqual((source / 'model/weights').read_bytes(), b'original weights')
+
+    def test_python_clone_rejects_destination_under_base_or_site(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            base, site = root / 'base', root / 'site'
+            base.mkdir()
+            site.mkdir()
+            info = json.dumps(dict(base=str(base), site=str(site), version='3.12.0'))
+            for source in (base, site):
+                target = source / 'nested'
+                with self.subTest(source=source), \
+                        patch.object(ai_runtime.subprocess, 'check_output', return_value=info), \
+                        patch.object(ai_runtime, 'qwen_files', side_effect=AssertionError('source traversal started')):
+                    with self.assertRaisesRegex(ValueError, 'outside its source'):
+                        ai_runtime.clone_python(root / 'python.exe', target)
+                self.assertFalse(target.exists())
+
+    def test_prepare_rejects_whisper_destination_under_source(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'whisper'
+            source.mkdir()
+            backend = source / 'faster-whisper-xxl.exe'
+            backend.write_bytes(b'original runtime')
+            settings = {'sub_fastwhisper-qwen_python': str(backend),
+                        'sub_fastwhisper-fast_whisper_path': str(backend)}
+            target = source / 'nested'
+            with patch.object(ai_runtime, 'clone_python'), patch.object(ai_runtime, 'copy_verified',
+                    side_effect=AssertionError('copy started before destination validation')):
+                with self.assertRaisesRegex(ValueError, 'outside its source'):
+                    ai_runtime.prepare(target, settings)
+            self.assertEqual(backend.read_bytes(), b'original runtime')
+            self.assertFalse((target / 'runtimes/whisper').exists())
+
     def test_copy_is_verified_repeatable_and_refuses_different_destination(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
