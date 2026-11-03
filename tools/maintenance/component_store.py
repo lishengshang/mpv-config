@@ -315,9 +315,9 @@ def install_lock(root):
         handle = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
     except FileExistsError:
         raise ValueError('Install lock exists. Inspect the interrupted installation before removing its lock: ' + str(path))
-    with os.fdopen(handle, 'w') as stream:
-        stream.write(str(os.getpid()))
     try:
+        with os.fdopen(handle, 'w') as stream:
+            stream.write(str(os.getpid()))
         yield
     finally:
         path.unlink()

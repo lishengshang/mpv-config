@@ -20,6 +20,22 @@ import components
 
 
 class ComponentTests(unittest.TestCase):
+    def test_install_lock_write_failure_allows_retry(self):
+        lock = self.root / 'portable_config/state/components/install.lock'
+        fdopen = os.fdopen
+        with patch.object(store.os, 'fdopen', side_effect=lambda fd, mode: fdopen(fd, 'r')):
+            with self.assertRaises(io.UnsupportedOperation):
+                with store.install_lock(self.root):
+                    self.fail('Install body ran without a written lock')
+        self.assertFalse(lock.exists())
+        with store.install_lock(self.root):
+            self.assertEqual(lock.read_text(), str(os.getpid()))
+            with self.assertRaisesRegex(ValueError, 'Install lock exists'):
+                with store.install_lock(self.root):
+                    self.fail('Install body ran while another lock was held')
+            self.assertTrue(lock.is_file())
+        self.assertFalse(lock.exists())
+
     def test_walk_rejects_missing_or_non_directory_source(self):
         file = self.base / 'file'
         file.write_bytes(b'not a directory')
