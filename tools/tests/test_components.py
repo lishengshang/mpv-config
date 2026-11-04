@@ -107,6 +107,8 @@ class ComponentTests(unittest.TestCase):
     def test_vs_export_rejects_top_level_directory_links(self):
         runtime, outside = self.base / 'vs', self.base / 'outside'
         runtime.mkdir()
+        # Exercise path aliases even when the temp directory has no 8.3 name.
+        runtime = runtime / '..' / runtime.name
         outside.mkdir()
         (outside / 'private.py').write_bytes(b'external source')
         link = runtime / 'Lib'
@@ -124,8 +126,9 @@ class ComponentTests(unittest.TestCase):
             self.assertEqual((outside / 'private.py').read_bytes(), b'external source')
             # Bootstrap excludes Lib entirely; unused directories do not block it.
             (runtime / 'python.exe').write_bytes(b'fixture Python')
-            self.assertEqual(dict(components.runtime_files(runtime, bootstrap=True)),
-                             {'python.exe': runtime / 'python.exe'})
+            bootstrap = dict(components.runtime_files(runtime, bootstrap=True))
+            self.assertEqual(set(bootstrap), {'python.exe'})
+            self.assertTrue(bootstrap['python.exe'].samefile(runtime / 'python.exe'))
         finally:
             if os.name == 'nt':
                 link.rmdir()
