@@ -29,6 +29,13 @@ def copy_installer(output):
         shutil.copy2(CONFIG / 'tools' / name, target)
 
 
+def check_source_link(path):
+    info = path.lstat()
+    if (stat.S_ISLNK(info.st_mode) or
+            getattr(info, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0)):
+        raise ValueError('Source contains a link: ' + str(path))
+
+
 def walk(source, prefix=''):
     source = Path(source).resolve()
     if not source.is_dir():
@@ -37,19 +44,13 @@ def walk(source, prefix=''):
     def failed(error):
         raise error
 
-    def check_link(path):
-        info = path.lstat()
-        if (stat.S_ISLNK(info.st_mode) or
-                getattr(info, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0)):
-            raise ValueError('Source contains a link: ' + str(path))
-
     for parent, directories, names in os.walk(source, onerror=failed):
         directories[:] = sorted(d for d in directories if d not in SKIP_DIRS)
         for name in directories:
-            check_link(Path(parent) / name)
+            check_source_link(Path(parent) / name)
         for name in sorted(names):
             path = Path(parent) / name
-            check_link(path)
+            check_source_link(path)
             if not path.resolve().is_relative_to(source):
                 raise ValueError('Source contains a link outside its component')
             if '.engine' in name or '.cache' in name or name.endswith(('.pyc', '.pyo', '.log')):
@@ -115,16 +116,20 @@ def local_settings(path):
 def runtime_files(root, bootstrap=False):
     root = Path(root).resolve()
     for path in sorted(root.iterdir()):
+        if not store.vs_path(path.name):
+            continue
+        if bootstrap and (path.name in store.VS_DIRS or
+                          path.name.startswith(('VSScript', 'VapourSynth')) or
+                          path.name in ('portable.vs', 'VSPipe.exe')):
+            continue
+        check_source_link(path)
         if not path.is_file():
             continue
-        if store.vs_path(path.name):
-            if bootstrap and (path.name.startswith(('VSScript', 'VapourSynth')) or path.name in ('portable.vs', 'VSPipe.exe')):
-                continue
-            if path.suffix == '._pth' and bootstrap:
-                stdlib = path.stem + '.zip'
-                yield path.name, (stdlib + '\n.\nimport site\n').encode()
-            else:
-                yield path.name, path
+        if path.suffix == '._pth' and bootstrap:
+            stdlib = path.stem + '.zip'
+            yield path.name, (stdlib + '\n.\nimport site\n').encode()
+        else:
+            yield path.name, path
     if not bootstrap:
         for name in sorted(store.VS_DIRS):
             if (root / name).is_dir():

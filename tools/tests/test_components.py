@@ -104,6 +104,37 @@ class ComponentTests(unittest.TestCase):
             else:
                 link.unlink()
 
+    def test_vs_export_rejects_top_level_directory_links(self):
+        runtime, outside = self.base / 'vs', self.base / 'outside'
+        runtime.mkdir()
+        outside.mkdir()
+        (outside / 'private.py').write_bytes(b'external source')
+        link = runtime / 'Lib'
+        try:
+            if os.name == 'nt':
+                subprocess.run(['cmd.exe', '/c', 'mklink', '/J', str(link), str(outside)],
+                               check=True, capture_output=True)
+            else:
+                link.symlink_to(outside, target_is_directory=True)
+        except (OSError, subprocess.CalledProcessError):
+            self.skipTest('directory link creation unavailable')
+        try:
+            with self.assertRaisesRegex(ValueError, 'link'):
+                list(components.runtime_files(runtime))
+            self.assertEqual((outside / 'private.py').read_bytes(), b'external source')
+            # Bootstrap excludes Lib entirely; unused directories do not block it.
+            (runtime / 'python.exe').write_bytes(b'fixture Python')
+            self.assertEqual(dict(components.runtime_files(runtime, bootstrap=True)),
+                             {'python.exe': runtime / 'python.exe'})
+        finally:
+            if os.name == 'nt':
+                link.rmdir()
+            else:
+                link.unlink()
+        (runtime / 'Lib').mkdir()
+        (runtime / 'Lib/local.py').write_bytes(b'local source')
+        self.assertIn('Lib/local.py', dict(components.runtime_files(runtime)))
+
     def test_whisper_export_includes_separate_models_without_old_duplicates(self):
         runtime, models = self.base / 'whisper', self.base / 'models'
         (runtime / '_models/old').mkdir(parents=True)
