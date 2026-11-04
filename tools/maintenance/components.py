@@ -75,6 +75,8 @@ def package(identifier, files, output, metadata=None, bootstrap=False):
             if isinstance(value, bytes):
                 incoming = __import__('io').BytesIO(value)
             else:
+                if Path(value).resolve() == temporary:
+                    raise ValueError('Component archive cannot include itself: ' + str(temporary))
                 incoming = Path(value).open('rb')
             with incoming, archive.open(info, 'w', force_zip64=True) as outgoing:
                 while block := incoming.read(1024 * 1024):

@@ -20,6 +20,24 @@ import components
 
 
 class ComponentTests(unittest.TestCase):
+    def test_package_rejects_its_own_output_inside_source(self):
+        source = self.base / 'source'
+        source.mkdir()
+        payload = source / 'input.bin'
+        payload.write_bytes(b'original payload')
+        output = source / 'exported'
+        with self.assertRaisesRegex(ValueError, 'include itself'):
+            components.package('media', components.walk(source), output)
+        self.assertEqual(payload.read_bytes(), b'original payload')
+        self.assertEqual([p for p in output.glob('media-*.zip')
+                          if not p.name.endswith('.pending.zip')], [])
+        ordinary = self.base / 'ordinary'
+        ordinary.mkdir()
+        (ordinary / 'ffmpeg.exe').write_bytes(b'fixture media')
+        item = components.package('media', components.walk(ordinary), self.base / 'separate')
+        store.unpack(self.base / 'separate' / item['archive'], item, self.base / 'unpacked')
+        self.assertEqual((self.base / 'unpacked/ffmpeg.exe').read_bytes(), b'fixture media')
+
     def test_install_lock_write_failure_allows_retry(self):
         lock = self.root / 'portable_config/state/components/install.lock'
         fdopen = os.fdopen
