@@ -12,6 +12,62 @@ import ai_runtime
 
 
 class MigrationTests(unittest.TestCase):
+    def test_copy_preserves_existing_partial_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source, target = root / 'source', root / 'target'
+            source.write_bytes(b'original runtime')
+            partial = root / 'target.copying'
+            partial.write_bytes(b'previous interrupted copy')
+            ai_runtime.copy_verified(source, target)
+            self.assertEqual(target.read_bytes(), b'original runtime')
+            self.assertEqual(partial.read_bytes(), b'previous interrupted copy')
+            self.assertEqual(set(root.iterdir()), {source, target, partial})
+
+    def test_copy_failure_cleans_only_owned_partial_and_allows_retry(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source, target = root / 'source', root / 'target'
+            source.write_bytes(b'original runtime')
+            previous = root / 'target.copying'
+            previous.write_bytes(b'previous interrupted copy')
+
+            def interrupted(incoming, outgoing, size):
+                outgoing.write(incoming.read(3))
+                raise OSError('fixture: interrupted copy')
+
+            with patch.object(ai_runtime.shutil, 'copyfileobj', side_effect=interrupted):
+                with self.assertRaisesRegex(OSError, 'interrupted copy'):
+                    ai_runtime.copy_verified(source, target)
+            self.assertEqual(set(root.iterdir()), {source, previous})
+            ai_runtime.copy_verified(source, target)
+            self.assertEqual(target.read_bytes(), source.read_bytes())
+            self.assertEqual(previous.read_bytes(), b'previous interrupted copy')
+            self.assertEqual(set(root.iterdir()), {source, target, previous})
+
+    def test_copy_checksum_failure_cleans_owned_partial(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source, target = root / 'source', root / 'target'
+            source.write_bytes(b'original runtime')
+            with patch.object(ai_runtime, 'digest', side_effect=['source hash', 'wrong hash']):
+                with self.assertRaisesRegex(RuntimeError, 'checksum mismatch'):
+                    ai_runtime.copy_verified(source, target)
+            self.assertEqual(list(root.iterdir()), [source])
+
+    def test_copy_temporary_name_collision_preserves_existing_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source, target = root / 'source', root / 'target'
+            source.write_bytes(b'original runtime')
+            previous = root / 'target.collision.copying'
+            previous.write_bytes(b'other copy')
+            with patch.object(ai_runtime.uuid, 'uuid4', return_value=SimpleNamespace(hex='collision')):
+                with self.assertRaises(FileExistsError):
+                    ai_runtime.copy_verified(source, target)
+            self.assertEqual(previous.read_bytes(), b'other copy')
+            self.assertEqual(set(root.iterdir()), {source, previous})
+
     def test_tree_copy_rejects_destination_in_source_before_writing(self):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / 'source'
@@ -121,6 +177,8 @@ class MigrationTests(unittest.TestCase):
                         'script-opts-append=sub_fastwhisper-whisper_batch_size=2\n')
             local.write_text(original, encoding='utf-8')
             original_bytes = local.read_bytes()
+            previous_pending = config / 'local.conf.pending'
+            previous_pending.write_bytes(b'previous private configuration draft')
             paths = ai_runtime.paths(root)
             for key in ('fast_whisper_path','ffmpeg_path','qwen_python','sensevoice_python'):
                 paths[key].parent.mkdir(parents=True, exist_ok=True)
@@ -153,6 +211,21 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(local.read_bytes(), before_collision)
             self.assertCountEqual([backup.read_bytes() for backup in backups], [original_bytes, first_registration])
             self.assertTrue(json.loads((root/'state/paths.json').read_text())['output_path'].endswith('subtitles'))
+            self.assertEqual(previous_pending.read_bytes(), b'previous private configuration draft')
+            with patch.object(ai_runtime, 'CONFIG', config), \
+                    patch.object(Path, 'replace', side_effect=OSError('fixture: replace failed')):
+                with self.assertRaisesRegex(OSError, 'replace failed'):
+                    ai_runtime.configure(root)
+            self.assertEqual(local.read_bytes(), before_collision)
+            self.assertEqual(list(config.glob('local.conf.*pending')), [previous_pending])
+            collision = config / 'local.conf.collision.pending'
+            collision.write_bytes(b'other registration')
+            with patch.object(ai_runtime, 'CONFIG', config), \
+                    patch.object(ai_runtime.uuid, 'uuid4', return_value=SimpleNamespace(hex='collision')):
+                with self.assertRaises(FileExistsError):
+                    ai_runtime.configure(root)
+            self.assertEqual(collision.read_bytes(), b'other registration')
+            self.assertEqual(local.read_bytes(), before_collision)
 
 
 if __name__ == '__main__':

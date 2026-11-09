@@ -26,11 +26,17 @@ def copy_verified(source, destination):
         if digest(source) != digest(destination):
             raise RuntimeError('Refuse to overwrite a different installed file: ' + str(destination))
         return
-    pending = destination.with_name(destination.name + '.copying')
-    shutil.copy2(source, pending)
-    if digest(source) != digest(pending):
-        raise RuntimeError('Migration checksum mismatch: ' + str(source))
-    pending.replace(destination)
+    pending = destination.with_name(destination.name + '.' + uuid.uuid4().hex + '.copying')
+    outgoing = pending.open('xb')
+    try:
+        with outgoing, source.open('rb') as incoming:
+            shutil.copyfileobj(incoming, outgoing, 1024 * 1024)
+        shutil.copystat(source, pending)
+        if digest(source) != digest(pending):
+            raise RuntimeError('Migration checksum mismatch: ' + str(source))
+        pending.replace(destination)
+    finally:
+        pending.unlink(missing_ok=True)
 
 
 def check_copy_destination(source, destination):
@@ -134,9 +140,14 @@ def configure(root):
     for key, value in target.items():
         text = re.sub(r'^\s*script-opts-append=sub_fastwhisper-' + key + r'=[^\r\n]*\r?\n?', '', text, flags=re.M)
         text = text.rstrip('\r\n') + '\nscript-opts-append=sub_fastwhisper-' + key + '=' + value.as_posix() + '\n'
-    pending = local.with_suffix('.conf.pending')
-    pending.write_text(text.replace('\r\n', '\n'), encoding='utf-8', newline='\n')
-    pending.replace(local)
+    pending = local.with_name(local.name + '.' + uuid.uuid4().hex + '.pending')
+    output = pending.open('x', encoding='utf-8', newline='\n')
+    try:
+        with output:
+            output.write(text.replace('\r\n', '\n'))
+        pending.replace(local)
+    finally:
+        pending.unlink(missing_ok=True)
     (root / 'state/paths.json').write_text(json.dumps({key: str(value) for key, value in target.items()}, indent=2) + '\n', encoding='utf-8')
     atomic_json(CONFIG / 'state/ai-runtime.json', dict(schema=1, root=str(root),
                 managed_keys=['sub_fastwhisper-' + key for key in target]))
