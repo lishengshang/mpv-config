@@ -56,8 +56,13 @@ def atomic_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.pending')
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n', encoding='utf-8', newline='\n')
-    os.replace(temporary, path)
+    output = temporary.open('x', encoding='utf-8', newline='\n')
+    try:
+        with output:
+            output.write(json.dumps(value, ensure_ascii=False, indent=2) + '\n')
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def catalog(value):

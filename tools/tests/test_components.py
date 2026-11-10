@@ -20,6 +20,29 @@ import components
 
 
 class ComponentTests(unittest.TestCase):
+    def test_atomic_json_failure_preserves_state_and_allows_retry(self):
+        target = self.base / 'state/receipt.json'
+        target.parent.mkdir()
+        original = b'{"installed": "previous"}\n'
+        target.write_bytes(original)
+        with patch.object(store.os, 'replace', side_effect=PermissionError('fixture: state busy')):
+            with self.assertRaisesRegex(PermissionError, 'state busy'):
+                store.atomic_json(target, {'installed': 'next'})
+        self.assertEqual(target.read_bytes(), original)
+        self.assertEqual(list(target.parent.glob('*.pending')), [])
+        store.atomic_json(target, {'installed': 'next'})
+        self.assertEqual(json.loads(target.read_text()), {'installed': 'next'})
+
+    def test_atomic_json_preserves_existing_pending_file(self):
+        target = self.base / 'receipt.json'
+        pending = target.with_name(target.name + '.collision.pending')
+        pending.write_bytes(b'existing draft')
+        with patch.object(store.uuid, 'uuid4', return_value=SimpleNamespace(hex='collision')):
+            with self.assertRaises(FileExistsError):
+                store.atomic_json(target, {'installed': 'next'})
+        self.assertEqual(pending.read_bytes(), b'existing draft')
+        self.assertFalse(target.exists())
+
     def test_package_rejects_its_own_output_inside_source(self):
         source = self.base / 'source'
         source.mkdir()
