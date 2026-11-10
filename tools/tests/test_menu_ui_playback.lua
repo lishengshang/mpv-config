@@ -16,7 +16,11 @@ local function find(id, items)
         if item.items then local found = find(id, item.items); if found then return found end end
     end
 end
-local function open(path) mp.commandv('script-message-to', 'menu_ui', 'open', path or '') end
+local pending_open
+local function open(path)
+    pending_open = {previous = get('user-data/uosc/menu/opened-at')}
+    mp.commandv('script-message-to', 'menu_ui', 'open', path or '')
+end
 local function close() mp.commandv('script-message-to', 'uosc', 'close-menu') end
 local function choose(parent, title)
     local items = parent == '' and menu().items or assert(find(parent), parent).items
@@ -201,7 +205,14 @@ local function tick()
         mp.commandv('quit', '0'); return
     end
     if not started then started = true; start_time = mp.get_time(); item[2](); return end
-    if item[3]() then completed[#completed + 1] = item[1]; step = step + 1; started = false
+    -- The old menu can remain visible while menu_ui/uosc process an open request.
+    -- Wait for the new instance before selecting; otherwise its initial selection
+    -- can overwrite select-menu-item and Enter activates a different action.
+    local opened = not pending_open or (kind() == 'menu-ui'
+        and get('user-data/uosc/menu/opened-at') ~= pending_open.previous)
+    if opened and item[3]() then
+        pending_open = nil
+        completed[#completed + 1] = item[1]; step = step + 1; started = false
     elseif mp.get_time() - start_time > 8 then error('timeout: ' .. item[1]) end
 end
 mp.add_timeout(1, function()
