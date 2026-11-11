@@ -383,6 +383,34 @@ class ComponentTests(unittest.TestCase):
         backup = next((self.root / 'portable_config/state/components').glob('local.conf.before-*'))
         self.assertIn('private-sentinel', backup.read_text())
 
+    def test_configure_cleans_failed_write_and_preserves_backup(self):
+        local = self.root / 'portable_config/local.conf'
+        original = 'keep-open=yes\n'
+        local.write_text(original, encoding='utf-8')
+        receipts = [{'id': 'media', 'root': self.root / 'media'}]
+        with patch.object(store.os, 'replace', side_effect=PermissionError('fixture: config busy')):
+            with self.assertRaisesRegex(PermissionError, 'config busy'):
+                store.configure(self.root, receipts)
+        self.assertEqual(local.read_text(encoding='utf-8'), original)
+        self.assertEqual(list(local.parent.glob('local.conf.*.pending')), [])
+        backups = list((local.parent / 'state/components').glob('local.conf.before-*'))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_text(encoding='utf-8'), original)
+        store.configure(self.root, receipts)
+        self.assertIn(original, local.read_text(encoding='utf-8'))
+        self.assertIn('sub_fastwhisper-ffmpeg_path=', local.read_text(encoding='utf-8'))
+
+    def test_configure_preserves_existing_pending_file(self):
+        local = self.root / 'portable_config/local.conf'
+        pending = local.with_name('local.conf.collision.pending')
+        pending.write_bytes(b'existing draft')
+        receipts = [{'id': 'media', 'root': self.root / 'media'}]
+        with patch.object(store.uuid, 'uuid4', return_value=SimpleNamespace(hex='collision')):
+            with self.assertRaises(FileExistsError):
+                store.configure(self.root, receipts)
+        self.assertEqual(pending.read_bytes(), b'existing draft')
+        self.assertFalse(local.exists())
+
     def test_moved_receipt_uses_current_root(self):
         archive, item = self.archive()
         store.install(self.root, item, archive, False)

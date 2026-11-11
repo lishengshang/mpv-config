@@ -53,16 +53,20 @@ def inside(root, name):
 
 
 def atomic_json(path, value):
-    path = Path(path)
+    atomic_text(Path(path), json.dumps(value, ensure_ascii=False, indent=2) + '\n')
+
+
+def atomic_text(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.pending')
     output = temporary.open('x', encoding='utf-8', newline='\n')
     try:
         with output:
-            output.write(json.dumps(value, ensure_ascii=False, indent=2) + '\n')
+            output.write(text)
         os.replace(temporary, path)
-    finally:
+    except BaseException:
         temporary.unlink(missing_ok=True)
+        raise
 
 
 def catalog(value):
@@ -441,7 +445,4 @@ def configure(root, receipts):
         backup = inside(root, 'portable_config/state/components/local.conf.before-' + uuid.uuid4().hex)
         backup.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(local, backup)
-    temporary = local.with_name('local.conf.' + uuid.uuid4().hex + '.pending')
-    temporary.parent.mkdir(parents=True, exist_ok=True)
-    temporary.write_text(text, encoding='utf-8', newline='\n')
-    os.replace(temporary, local)
+    atomic_text(local, text)
