@@ -52,14 +52,32 @@ class ComponentTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'include itself'):
             components.package('media', components.walk(source), output)
         self.assertEqual(payload.read_bytes(), b'original payload')
-        self.assertEqual([p for p in output.glob('media-*.zip')
-                          if not p.name.endswith('.pending.zip')], [])
+        self.assertEqual(list(output.iterdir()), [])
         ordinary = self.base / 'ordinary'
         ordinary.mkdir()
         (ordinary / 'ffmpeg.exe').write_bytes(b'fixture media')
         item = components.package('media', components.walk(ordinary), self.base / 'separate')
         store.unpack(self.base / 'separate' / item['archive'], item, self.base / 'unpacked')
         self.assertEqual((self.base / 'unpacked/ffmpeg.exe').read_bytes(), b'fixture media')
+
+    def test_package_preserves_published_archive_on_duplicate_export(self):
+        output = self.base / 'output'
+        files = [('ffmpeg.exe', b'fixture media')]
+        item = components.package('media', files, output)
+        target = output / item['archive']
+        original = target.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'Immutable archive already exists'):
+            components.package('media', files, output)
+        self.assertEqual(list(output.iterdir()), [target])
+        self.assertEqual(target.read_bytes(), original)
+
+    def test_package_preserves_existing_pending_archive(self):
+        pending = self.base / 'media-collision.pending.zip'
+        pending.write_bytes(b'existing export')
+        with patch.object(components.uuid, 'uuid4', return_value=SimpleNamespace(hex='collision')):
+            with self.assertRaises(FileExistsError):
+                components.package('media', [('ffmpeg.exe', b'fixture media')], self.base)
+        self.assertEqual(pending.read_bytes(), b'existing export')
 
     def test_install_lock_write_failure_allows_retry(self):
         lock = self.root / 'portable_config/state/components/install.lock'

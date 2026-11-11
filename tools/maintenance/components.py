@@ -63,43 +63,49 @@ def package(identifier, files, output, metadata=None, bootstrap=False):
     output.mkdir(parents=True, exist_ok=True)
     temporary = output / (identifier + '-' + uuid.uuid4().hex + '.pending.zip')
     entries, names, count_bytes = [], set(), 0
-    with zipfile.ZipFile(temporary, 'x', compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as archive:
-        for index, (name, value) in enumerate(files):
-            store.relative(name)
-            if name.casefold() in names:
-                raise ValueError('Duplicate source file: ' + name)
-            names.add(name.casefold())
-            info = zipfile.ZipInfo(('' if bootstrap else 'payload/') + name, (2020, 1, 1, 0, 0, 0))
-            info.compress_type = zipfile.ZIP_DEFLATED
-            info._compresslevel = 1
-            h, size = hashlib.sha256(), 0
-            if isinstance(value, bytes):
-                incoming = __import__('io').BytesIO(value)
-            else:
-                if Path(value).resolve() == temporary:
-                    raise ValueError('Component archive cannot include itself: ' + str(temporary))
-                incoming = Path(value).open('rb')
-            with incoming, archive.open(info, 'w', force_zip64=True) as outgoing:
-                while block := incoming.read(1024 * 1024):
-                    outgoing.write(block)
-                    h.update(block)
-                    size += len(block)
-                    count_bytes += len(block)
-            entries.append(dict(path=name, bytes=size, sha256=h.hexdigest()))
-            if index and index % 3000 == 0:
-                print(f'{identifier}: packed {index} files, {count_bytes / 1024**3:.2f} GiB', flush=True)
-        tree = hashlib.sha256(json.dumps(entries, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-        version = 'local-' + tree[:16]
-        if not bootstrap:
-            info = zipfile.ZipInfo('component.json', (2020, 1, 1, 0, 0, 0))
-            info.compress_type, info._compresslevel = zipfile.ZIP_DEFLATED, 1
-            archive.writestr(info, json.dumps(dict(schema=1, id=identifier, version=version, files=entries,
-                                                 metadata=metadata or {}), ensure_ascii=False))
-    name = identifier + '-' + tree[:16] + '.zip'
-    target = output / name
-    if target.exists():
-        raise ValueError('Immutable archive already exists; choose a new output directory: ' + name)
-    os.rename(temporary, target)
+    pending = temporary.open('xb')
+    try:
+        with pending, zipfile.ZipFile(pending, 'w', compression=zipfile.ZIP_DEFLATED,
+                                          compresslevel=1, allowZip64=True) as archive:
+            for index, (name, value) in enumerate(files):
+                store.relative(name)
+                if name.casefold() in names:
+                    raise ValueError('Duplicate source file: ' + name)
+                names.add(name.casefold())
+                info = zipfile.ZipInfo(('' if bootstrap else 'payload/') + name, (2020, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info._compresslevel = 1
+                h, size = hashlib.sha256(), 0
+                if isinstance(value, bytes):
+                    incoming = __import__('io').BytesIO(value)
+                else:
+                    if Path(value).resolve() == temporary:
+                        raise ValueError('Component archive cannot include itself: ' + str(temporary))
+                    incoming = Path(value).open('rb')
+                with incoming, archive.open(info, 'w', force_zip64=True) as outgoing:
+                    while block := incoming.read(1024 * 1024):
+                        outgoing.write(block)
+                        h.update(block)
+                        size += len(block)
+                        count_bytes += len(block)
+                entries.append(dict(path=name, bytes=size, sha256=h.hexdigest()))
+                if index and index % 3000 == 0:
+                    print(f'{identifier}: packed {index} files, {count_bytes / 1024**3:.2f} GiB', flush=True)
+            tree = hashlib.sha256(json.dumps(entries, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+            version = 'local-' + tree[:16]
+            if not bootstrap:
+                info = zipfile.ZipInfo('component.json', (2020, 1, 1, 0, 0, 0))
+                info.compress_type, info._compresslevel = zipfile.ZIP_DEFLATED, 1
+                archive.writestr(info, json.dumps(dict(schema=1, id=identifier, version=version, files=entries,
+                                                     metadata=metadata or {}), ensure_ascii=False))
+        name = identifier + '-' + tree[:16] + '.zip'
+        target = output / name
+        if target.exists():
+            raise ValueError('Immutable archive already exists; choose a new output directory: ' + name)
+        os.rename(temporary, target)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
     result = dict(id=identifier, version=version, archive=name, bytes=target.stat().st_size,
                   expanded_bytes=count_bytes, sha256=store.digest(target), metadata=metadata or {})
     print(f"PACKED {identifier}: {len(entries)} files, {result['bytes'] / 1024**3:.2f} GiB", flush=True)
