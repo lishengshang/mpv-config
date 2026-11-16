@@ -12,7 +12,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from components import CONFIG, local_settings, qwen_files, walk
-from component_store import atomic_json
+from component_store import atomic_bytes, atomic_json, atomic_text, install_lock
 
 
 def digest(path):
@@ -116,7 +116,7 @@ def prepare(root, settings):
     old_cache = Path(old_cache.replace('~~/', CONFIG.as_posix() + '/'))
     if old_cache.is_dir() and old_cache.resolve() != target['output_path'].resolve():
         copy_tree(old_cache, target['output_path'])
-    (root / 'state/paths.json').write_text(json.dumps({key: str(value) for key, value in target.items()}, indent=2) + '\n', encoding='utf-8')
+    atomic_json(root / 'state/paths.json', {key: str(value) for key, value in target.items()})
 
 
 def configure(root):
@@ -130,28 +130,38 @@ def configure(root):
             raise RuntimeError('Model missing: ' + key + '; local.conf was not changed')
     if not any(target['whisper_model_dir'].rglob('model.bin')):
         raise RuntimeError('Model missing: whisper_model_dir; local.conf was not changed')
+    with install_lock(CONFIG.parent, config_name=CONFIG.name):
+        _register_paths(root, target)
+    print('AI paths configured; previous local.conf backed up inside the private runtime state directory.')
+
+
+def _register_paths(root, target):
     local = CONFIG / 'local.conf'
     text = local.read_text(encoding='utf-8-sig') if local.is_file() else ''
     backup = root / 'state' / ('local-' + time.strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex + '.conf')
     if local.is_file():
+        backup.parent.mkdir(parents=True, exist_ok=True)
         with local.open('rb') as source, backup.open('xb') as target_file:
             shutil.copyfileobj(source, target_file)
     # Only managed AI paths are replaced; private API options and tuning are retained.
     for key, value in target.items():
         text = re.sub(r'^\s*script-opts-append=sub_fastwhisper-' + key + r'=[^\r\n]*\r?\n?', '', text, flags=re.M)
         text = text.rstrip('\r\n') + '\nscript-opts-append=sub_fastwhisper-' + key + '=' + value.as_posix() + '\n'
-    pending = local.with_name(local.name + '.' + uuid.uuid4().hex + '.pending')
-    output = pending.open('x', encoding='utf-8', newline='\n')
-    try:
-        with output:
-            output.write(text.replace('\r\n', '\n'))
-        pending.replace(local)
-    finally:
-        pending.unlink(missing_ok=True)
-    (root / 'state/paths.json').write_text(json.dumps({key: str(value) for key, value in target.items()}, indent=2) + '\n', encoding='utf-8')
-    atomic_json(CONFIG / 'state/ai-runtime.json', dict(schema=1, root=str(root),
+    # The runtime inventory describes prepared files. Commit the active config
+    # last, with ownership protected from concurrent component configuration.
+    atomic_json(root / 'state/paths.json', {key: str(value) for key, value in target.items()})
+    registration = CONFIG / 'state/ai-runtime.json'
+    previous = registration.read_bytes() if registration.is_file() else None
+    atomic_json(registration, dict(schema=1, root=str(root),
                 managed_keys=['sub_fastwhisper-' + key for key in target]))
-    print('AI paths configured; previous local.conf backed up inside the private runtime state directory.')
+    try:
+        atomic_text(local, text)
+    except OSError:
+        if previous is None:
+            registration.unlink()
+        else:
+            atomic_bytes(registration, previous)
+        raise
 
 
 def main():

@@ -57,12 +57,16 @@ def atomic_json(path, value):
 
 
 def atomic_text(path, text):
+    atomic_bytes(path, text.encode('utf-8'))
+
+
+def atomic_bytes(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.pending')
-    output = temporary.open('x', encoding='utf-8', newline='\n')
+    output = temporary.open('xb')
     try:
         with output:
-            output.write(text)
+            output.write(data)
         os.replace(temporary, path)
     except BaseException:
         temporary.unlink(missing_ok=True)
@@ -317,8 +321,8 @@ def probe(kind, directory, *, model_dirs=None):
 
 
 @contextlib.contextmanager
-def install_lock(root):
-    path = inside(root, 'portable_config/state/components/install.lock')
+def install_lock(root, *, config_name='portable_config'):
+    path = inside(root, f'{config_name}/state/components/install.lock')
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         handle = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
