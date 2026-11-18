@@ -35,6 +35,15 @@ class ReferenceChecks(unittest.TestCase):
         (self.root / 'local.conf').write_bytes(b'\xffprivate')
         self.assertEqual(self.findings(), [])
 
+    def test_utf8_bom_preserves_first_config_and_input_lines(self):
+        (self.root / 'mpv.conf').write_text('include="~~/extra.conf"\nprofile=extra\n', encoding='utf-8-sig')
+        (self.root / 'extra.conf').write_text('[extra]\n', encoding='utf-8-sig')
+        (self.root / 'input.conf').write_text('x apply-profile undefined\n', encoding='utf-8-sig')
+        checker = Checker(self.root)
+        findings = checker.run()
+        self.assertEqual([(f.rule, f.file, f.line) for f in findings], [('missing-profile', 'input.conf', 1)])
+        self.assertEqual(checker.bindings[0].key, 'x')
+
     def test_missing_shader_in_profile_reports_location(self):
         self.write('profiles.conf', '[valid]\nglsl-shaders="~~/shaders/missing.glsl"\n')
         finding = self.findings()[0]

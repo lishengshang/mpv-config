@@ -119,7 +119,7 @@ class Checker:
             return self.sources[path]
         label = path.relative_to(self.root).as_posix()
         try:
-            lines = path.read_text(encoding='utf-8').splitlines()
+            lines = path.read_text(encoding='utf-8-sig').splitlines()
         except (OSError, UnicodeError):
             self.add('error', 'source-read', label, 1, 'Cannot read UTF-8 configuration file')
             lines = []
