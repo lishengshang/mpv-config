@@ -371,11 +371,13 @@ def archive_release(args):
         raise ValueError('Missing or mismatched successful runtime check')
     if report['files_sha256'] != fingerprint(player):
         raise ValueError('Player changed after verification; run the check again')
+    # Capture the input file list before creating the ZIP, which may be inside player.
+    files = list(distributable_files(player))
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=False)
     target = output / (plan['tag'] + '-windows-x64.zip')
     with zipfile.ZipFile(target, 'x', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-        for path, relative in distributable_files(player):
+        for path, relative in files:
             if relative == 'portable_config/local.conf':
                 continue
             archive.write(path, 'MPV/' + relative)

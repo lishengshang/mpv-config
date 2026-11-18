@@ -131,14 +131,17 @@ class ReleaseChecks(unittest.TestCase):
             report = root / 'report.json'
             release.dump(report, dict(passed=True, config_commit='b' * 40, mpv_commit='a' * 40,
                                       files_sha256=release.fingerprint(player)))
-            args = argparse.Namespace(player=player, report=report, output=root / 'assets')
-            release.archive_release(args)
-            archive = next(args.output.glob('*.zip'))
-            with zipfile.ZipFile(archive) as zipped:
-                self.assertIsNone(zipped.testzip())
-                self.assertNotIn('MPV/portable_config/files/history.log', zipped.namelist())
-                self.assertIn('MPV/portable_config/files/', zipped.namelist())
-                self.assertIn('MPV/portable_config/local.conf', zipped.namelist())
+            for output in (root / 'assets', player / 'assets'):
+                with self.subTest(output=output):
+                    args = argparse.Namespace(player=player, report=report, output=output)
+                    release.archive_release(args)
+                    archive = next(output.glob('*.zip'))
+                    with zipfile.ZipFile(archive) as zipped:
+                        self.assertIsNone(zipped.testzip())
+                        self.assertNotIn('MPV/assets/' + archive.name, zipped.namelist())
+                        self.assertNotIn('MPV/portable_config/files/history.log', zipped.namelist())
+                        self.assertIn('MPV/portable_config/files/', zipped.namelist())
+                        self.assertIn('MPV/portable_config/local.conf', zipped.namelist())
 
     def test_published_release_is_never_clobbered_or_promoted(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -279,7 +282,7 @@ class NativeReleaseChecks(unittest.TestCase):
             release.dump(player / 'release-info.json', plan)
             evidence = root / 'stage-evidence'
             release.check_release(argparse.Namespace(player=player, evidence=evidence))
-            assets = root / 'assets'
+            assets = player / 'assets'
             release.archive_release(argparse.Namespace(player=player, report=evidence / 'report.json', output=assets))
             release.check_archive(argparse.Namespace(assets=assets, evidence=root / 'archive-evidence'))
             report = json.loads((assets / 'smoke-report.json').read_text(encoding='utf-8'))
