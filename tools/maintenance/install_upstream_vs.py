@@ -29,7 +29,7 @@ def install(root, source, package_hash):
                     shutil.copyfile(candidate, path)
                     digest = store.digest(path)
             files.append(dict(path=name, bytes=path.stat().st_size, sha256=digest))
-        item = dict(id='vs', version='mpv-playkit-20260510', sha256=package_hash)
+        item = dict(id='vs', version='mpv-playkit-20260510-artcnn-1.6.2', sha256=package_hash)
         receipt = store.install_payload(root, item, {'files': files}, source)
         store.configure(root, [receipt])
 

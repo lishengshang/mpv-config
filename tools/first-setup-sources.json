@@ -59,5 +59,19 @@
     "url": "https://github.com/astral-sh/uv/releases/download/0.13.1/uv-x86_64-pc-windows-msvc.zip",
     "bytes": 15308685,
     "sha256": "3b2661a463a5baea7f5076ea2b25ab71d77f36a6c0d809e5350651792f80a672"
-  }
+  },
+  "artcnn_chroma": [
+    {
+      "name": "ArtCNN_R8F64_Chroma.onnx",
+      "url": "https://github.com/Artoriuz/ArtCNN/releases/download/v1.6.2/ArtCNN_R8F64_Chroma.onnx",
+      "bytes": 3716437,
+      "sha256": "9d5bfdc060d941854a131f5bd4da53d035798f3ca9e6d39ee5c53240917fb1e0"
+    },
+    {
+      "name": "ArtCNN_R8F64_Chroma_DN.onnx",
+      "url": "https://github.com/Artoriuz/ArtCNN/releases/download/v1.6.2/ArtCNN_R8F64_Chroma_DN.onnx",
+      "bytes": 3716440,
+      "sha256": "4d74d559b4852e7b76152e9d3f9d3cf679d64aad2fefb2bbcd8b67df2ccb1b32"
+    }
+  ]
 }

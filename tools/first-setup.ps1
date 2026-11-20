@@ -107,8 +107,14 @@ function Remove-Stage([string]$Path) {
     Remove-Item -LiteralPath $resolved -Recurse -Force
 }
 
-function Install-VapourSynth($AssetList) {
-    if (Test-Path -LiteralPath (Join-Path $config 'state\components\vs.json') -PathType Leaf) {
+function Install-VapourSynth($AssetList, $ChromaModels) {
+    $modelsReady = $true
+    foreach ($asset in $ChromaModels) {
+        $installed = Join-Path $player ('vs-plugins\models\ArtCNN\' + $asset.name)
+        Assert-LocalPath $installed
+        if (!(Test-Asset $installed $asset)) { $modelsReady = $false }
+    }
+    if ($modelsReady -and (Test-Path -LiteralPath (Join-Path $config 'state\components\vs.json') -PathType Leaf)) {
         $python = Join-Path $player 'python.exe'
         & $python -B (Join-Path $PSScriptRoot 'maintenance/components.py') configure --mpv-root $player
         if ($LASTEXITCODE) { throw 'VapourSynth path repair failed.' }
@@ -140,6 +146,17 @@ function Install-VapourSynth($AssetList) {
     })
     if ($candidates.Count -ne 1) { throw 'Expected exactly one portable VS runtime.' }
     $runtime = $candidates[0].DirectoryName
+    $artcnn = Join-Path $runtime 'vs-plugins\models\ArtCNN'
+    Assert-LocalPath $artcnn
+    [IO.Directory]::CreateDirectory($artcnn) | Out-Null
+    foreach ($asset in $ChromaModels) {
+        $destination = Join-Path $artcnn $asset.name
+        Assert-LocalPath $destination
+        Get-Asset $asset (Join-Path $download $asset.name)
+        if (!(Test-Asset $destination $asset)) {
+            [IO.File]::Copy((Join-Path $download $asset.name), $destination)
+        }
+    }
     $python = Join-Path $runtime 'python.exe'
     Assert-LocalPath $python
     & $python -B (Join-Path $PSScriptRoot 'maintenance/install_upstream_vs.py') $player $runtime $archiveHash
@@ -263,7 +280,7 @@ $lock = [IO.File]::Open($lockFile, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]:
 try {
     $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'first-setup-sources.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($Action -eq 'VapourSynth') {
-        Install-VapourSynth $catalog.vapoursynth
+        Install-VapourSynth $catalog.vapoursynth $catalog.artcnn_chroma
         return
     }
     if ($Action -in @('Qwen','SenseVoice')) {

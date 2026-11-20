@@ -135,7 +135,7 @@ python tools/tests/test_release.py
 
 从 Release 下载 Windows x64 ZIP，解压后双击根目录的 `first-setup.cmd`。选择 Whisper CPU 可以在无 NVIDIA 显卡的 Windows x64 机器上启用 AI 字幕。Whisper CUDA、VapourSynth RTX、Qwen 和 SenseVoice 需要兼容的 NVIDIA 显卡及驱动。安装完成后拖入一段有清楚人声的视频，按 `Alt+F` 生成默认 Whisper 字幕。Qwen 和 SenseVoice 在 AI 字幕菜单选择，VapourSynth 使用 `mpv-components.cmd` 启动后再试 RIFE 或 Bilateral。
 
-联网入口将 Faster-Whisper-XXL、VapourSynth 和 uv 从固定的上游 GitHub 发行下载，将模型从固定修订的模型仓库下载。Whisper 运行时、模型文件、VapourSynth 两个分卷和 uv 的大小与 SHA-256 记录在 `tools/first-setup-sources.json`。Qwen 和 SenseVoice 按固定版本安装独立 Python、PyTorch 与 ASR 包，模型权重由原有下载器校验。公开 ZIP 只提供播放器、公共默认值和安装代码。翻译密钥可在本机另行填写。
+联网入口将 Faster-Whisper-XXL、VapourSynth 和 uv 从固定的上游 GitHub 发行下载，将模型从固定修订的模型仓库下载。Whisper 运行时、模型文件、VapourSynth 两个分卷、ArtCNN 官方色度模型和 uv 的大小与 SHA-256 记录在 `tools/first-setup-sources.json`。Qwen 和 SenseVoice 按固定版本安装独立 Python、PyTorch 与 ASR 包，模型权重由原有下载器校验。公开 ZIP 只提供播放器、公共默认值和安装代码。翻译密钥可在本机另行填写。
 
 已校验的下载保留在 `portable_config/cache/first-setup/downloads`；连接失败后重开安装器即可重用完整文件。AI 的路径相对于播放器目录登记。搬动安装了 VS 的目录后，再运行一次 VapourSynth 安装选项刷新启动器路径。清理下载缓存前先退出安装器。
 
