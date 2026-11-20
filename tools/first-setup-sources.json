@@ -1,0 +1,63 @@
+{
+  "whisper": {
+    "directory": "whisper-r245.4-large-v3-turbo",
+    "archive": {
+      "name": "Faster-Whisper-XXL_r245.4_windows.7z",
+      "url": "https://github.com/Purfview/whisper-standalone-win/releases/download/Faster-Whisper-XXL/Faster-Whisper-XXL_r245.4_windows.7z",
+      "bytes": 1424256246,
+      "sha256": "237dee23939cdabfc96ef859fc5e584b842c3a5557e0d2ca744e1f87c14c5844"
+    },
+    "model": [
+      {
+        "name": "config.json",
+        "url": "https://huggingface.co/deepdml/faster-whisper-large-v3-turbo-ct2/resolve/4df90f75321148c3a29a9e2351b7ddf8f5b115a8/config.json",
+        "bytes": 2263,
+        "sha256": "b0253ea6c0d3bea6b1e19e91a02acfd3b53f4467362efcb5a3e6b16c9b3a9b7e"
+      },
+      {
+        "name": "model.bin",
+        "url": "https://huggingface.co/deepdml/faster-whisper-large-v3-turbo-ct2/resolve/4df90f75321148c3a29a9e2351b7ddf8f5b115a8/model.bin",
+        "bytes": 1617884929,
+        "sha256": "e76620f83d5f5b69efd3d87e3dc180c1bd21df9fbebacfd4335e5e1efcc018da"
+      },
+      {
+        "name": "preprocessor_config.json",
+        "url": "https://huggingface.co/deepdml/faster-whisper-large-v3-turbo-ct2/resolve/4df90f75321148c3a29a9e2351b7ddf8f5b115a8/preprocessor_config.json",
+        "bytes": 340,
+        "sha256": "7ccc62c6f2765af1f3b46c00c9b5894426835a05021c8b9c01eecb6dfb542711"
+      },
+      {
+        "name": "tokenizer.json",
+        "url": "https://huggingface.co/deepdml/faster-whisper-large-v3-turbo-ct2/resolve/4df90f75321148c3a29a9e2351b7ddf8f5b115a8/tokenizer.json",
+        "bytes": 2710337,
+        "sha256": "297b13372ac43916285644fb9687add3cc62ee2a1adb60da3dc25cc94c1871fd"
+      },
+      {
+        "name": "vocabulary.json",
+        "url": "https://huggingface.co/deepdml/faster-whisper-large-v3-turbo-ct2/resolve/4df90f75321148c3a29a9e2351b7ddf8f5b115a8/vocabulary.json",
+        "bytes": 1068114,
+        "sha256": "c69260f2ab26d659b7c398f9a2b2b48ed0df16c3b47d7326782fd9cba71690c1"
+      }
+    ]
+  },
+  "vapoursynth": [
+    {
+      "name": "mpv-lazy-20260510-vsNV.7z.001",
+      "url": "https://github.com/hooke007/mpv_PlayKit/releases/download/20260510/mpv-lazy-20260510-vsNV.7z.001",
+      "bytes": 1610612736,
+      "sha256": "f877973fae54d7cc05451d0369340f5a4ef6c82a2f633c66b786a337d3e6ddda"
+    },
+    {
+      "name": "mpv-lazy-20260510-vsNV.7z.002",
+      "url": "https://github.com/hooke007/mpv_PlayKit/releases/download/20260510/mpv-lazy-20260510-vsNV.7z.002",
+      "bytes": 1295256359,
+      "sha256": "1c7303d76f3767f16122c5ea16894add08b6c044ab15d2ccefba6155b8782007"
+    }
+  ],
+  "uv": {
+    "name": "uv-x86_64-pc-windows-msvc.zip",
+    "url": "https://github.com/astral-sh/uv/releases/download/0.13.1/uv-x86_64-pc-windows-msvc.zip",
+    "bytes": 15308685,
+    "sha256": "3b2661a463a5baea7f5076ea2b25ab71d77f36a6c0d809e5350651792f80a672"
+  }
+}

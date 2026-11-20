@@ -123,7 +123,7 @@ python tools/tests/test_release.py
 
 干净且已提交的源码可去掉 `--allow-dirty`。`stage`、`check`、`archive`、`check-archive`、`publish` 的完整参数见各自 `--help`；编译脚本 `tools/release/build-release-msys2.sh` 只在 CI 的 UCRT64 环境执行，不在日常播放器目录安装编译器。`publish` 是实际远端写入命令，日常自检不调用。
 
-公开候选仍是播放器及配置，`release/manifest.json` 的 `components` 清单尚未填入公开分包。下方工具已支持本机快照的固定清单、安装和迁移；候选与组件整合的本机实测见下方日期记录，干净机器尚未验收，当前不能称为公开离线完整版。
+公开候选包含播放器与配置。带 `first-setup.cmd` 的候选可联网安装组件。离线清单与本机快照的用法见下方组件章节。
 
 转正式版前，使用最终下载的候选包和选定组件完成启动/媒体/菜单/切片/重置、每个提供的 VS 预设产帧及 shader 渲染、Whisper/Qwen 真实字幕/缓存/取消、路径迁移和干净机器验收。把硬件、版本、组件和未覆盖项记入 Release 说明，保留原始证据；之后在 GitHub 编辑该预发布，取消 Pre-release 并设置 Latest。流程不自动做此晋级。
 
@@ -132,6 +132,12 @@ python tools/tests/test_release.py
 依据：[mpv 正式发布](https://github.com/mpv-player/mpv/releases)、[官方 MSYS2 CI](https://github.com/mpv-player/mpv/blob/v0.41.0/ci/build-msys2.sh)、[GitHub 定时事件](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)。
 
 ## 组件安装与迁移
+
+从 Release 下载 Windows x64 ZIP，解压后双击根目录的 `first-setup.cmd`。选择 Whisper CPU 可以在无 NVIDIA 显卡的 Windows x64 机器上启用 AI 字幕。Whisper CUDA、VapourSynth RTX、Qwen 和 SenseVoice 需要兼容的 NVIDIA 显卡及驱动。安装完成后拖入一段有清楚人声的视频，按 `Alt+F` 生成默认 Whisper 字幕。Qwen 和 SenseVoice 在 AI 字幕菜单选择，VapourSynth 使用 `mpv-components.cmd` 启动后再试 RIFE 或 Bilateral。
+
+联网入口将 Faster-Whisper-XXL、VapourSynth 和 uv 从固定的上游 GitHub 发行下载，将模型从固定修订的模型仓库下载。Whisper 运行时、模型文件、VapourSynth 两个分卷和 uv 的大小与 SHA-256 记录在 `tools/first-setup-sources.json`。Qwen 和 SenseVoice 按固定版本安装独立 Python、PyTorch 与 ASR 包，模型权重由原有下载器校验。公开 ZIP 只提供播放器、公共默认值和安装代码。翻译密钥可在本机另行填写。
+
+已校验的下载保留在 `portable_config/cache/first-setup/downloads`；连接失败后重开安装器即可重用完整文件。AI 的路径相对于播放器目录登记。搬动安装了 VS 的目录后，再运行一次 VapourSynth 安装选项刷新启动器路径。清理下载缓存前先退出安装器。
 
 统一 AI 目录中的模型与运行时分开保存。组件 `export` 会读取 `local.conf` 的 `sub_fastwhisper-whisper_model_dir`，将该目录放入 Whisper 包的 `_models/`，不混入运行时旁旧模型；缺模型时停止导出。未托管环境的 `status` 按已配置的 Whisper/Qwen 模型路径检查，已安装组件仍只验收包内模型。当前组件清单仅支持 VS、媒体工具、Whisper 和 Qwen 1.7B/对齐器，尚不部署 SenseVoice 或 Qwen 0.6B；统一安装入口仍见 [AI 字幕](ai-subtitles.md#统一安装与目录)。
 

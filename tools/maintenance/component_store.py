@@ -341,7 +341,15 @@ def install(root, item, archive, run_probe=True):
     stage = inside(root, 'portable_config/cache/component-staging/' + item['id'] + '-' + uuid.uuid4().hex)
     stage.mkdir(parents=True)
     manifest = unpack(archive, item, stage / 'payload')
-    payload = stage / 'payload'
+    receipt = install_payload(root, item, manifest, stage / 'payload', run_probe=run_probe)
+    # Only this installer-created staging directory, resolved inside this player's cache.
+    if not stage.resolve().is_relative_to(root / 'portable_config/cache/component-staging'):
+        raise ValueError('Unexpected staging cleanup location')
+    shutil.rmtree(stage)
+    return receipt
+
+
+def install_payload(root, item, manifest, payload, run_probe=True):
     if run_probe:
         probe(item['id'], payload)
     target = root if item['id'] == 'vs' else inside(root, f"components/{item['id']}/{item['version']}")
@@ -388,10 +396,6 @@ def install(root, item, archive, run_probe=True):
             if path.resolve().is_relative_to(root):
                 path.unlink(missing_ok=True)
         raise
-    # Only this installer-created staging directory, resolved inside this player's cache.
-    if not stage.resolve().is_relative_to(root / 'portable_config/cache/component-staging'):
-        raise ValueError('Unexpected staging cleanup location')
-    shutil.rmtree(stage)
     return receipt
 
 

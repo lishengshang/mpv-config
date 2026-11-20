@@ -281,6 +281,9 @@ def package_release(args):
     if config.exists():
         raise ValueError('Runtime must not contain bundled personal configuration')
     snapshot_config(source, plan['config_commit'], config)
+    setup_launcher = config / 'tools/first-setup.cmd'
+    if setup_launcher.is_file():
+        shutil.copyfile(setup_launcher, player / setup_launcher.name)
     dump(player / 'release-info.json', plan)
     dump(player / 'components.json', {'schema': 1, 'components': plan['build']['components'],
                                      'pending': plan['build']['pending_components']})
@@ -402,6 +405,11 @@ def archive_release(args):
              'Automated checks cover CPU playback, script startup, next-file/reset and native command parsing. '
              'GPU rendering, VS output, AI inference and fresh-machine portability require acceptance before stable promotion.\n\n'
              'Optional components are versioned separately. This candidate does not claim a complete offline AI/VS installation.\n')
+    if (player / 'first-setup.cmd').is_file():
+        notes += ('\nExtract the Windows x64 ZIP and open MPV/mpv.exe. '
+                  'Double-click MPV/first-setup.cmd to download optional components from upstream. '
+                  'Whisper runs on CPU or NVIDIA CUDA. VapourSynth, Qwen and SenseVoice require '
+                  'a compatible NVIDIA GPU and driver for the offered presets.\n')
     if selected_backports(plan):
         notes += '\nUpstream compatibility backports (included in mpv-source.patch):\n' + ''.join(
             f'- [{commit[:7]}](https://github.com/mpv-player/mpv/commit/{commit})\n' for commit in selected_backports(plan))

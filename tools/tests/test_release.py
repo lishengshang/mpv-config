@@ -117,6 +117,26 @@ class ReleaseChecks(unittest.TestCase):
                 release.archive_release(args)
             self.assertFalse(args.output.exists())
 
+    def test_stage_copies_setup_launcher_from_committed_config(self):
+        plan = sample_plan()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            runtime, output = root / 'runtime', root / 'stage'
+            runtime.mkdir()
+            release.dump(runtime / 'build-info.json', dict(
+                mpv_tag=plan['mpv_tag'], mpv_commit=plan['mpv_commit'], dependencies=plan['build']))
+            launcher = b'@echo off\\n'
+            def snapshot(_source, _commit, config):
+                tools = config / 'tools'
+                tools.mkdir(parents=True)
+                (tools / 'first-setup.cmd').write_bytes(launcher)
+            with patch.object(release, 'load_plan', return_value=plan), \
+                    patch.object(release, 'run', return_value=plan['config_commit']), \
+                    patch.object(release, 'validate_capabilities', return_value='mpv ' + plan['mpv_tag'] + ' build'), \
+                    patch.object(release, 'snapshot_config', side_effect=snapshot):
+                release.package_release(argparse.Namespace(plan=root / 'plan.json', output=output, runtime=runtime))
+            self.assertEqual((output / 'MPV/first-setup.cmd').read_bytes(), launcher)
+
     def test_archive_is_reopenable_and_does_not_ship_test_history(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

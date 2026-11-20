@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "repository": "lishengshang/mpv-config",
-  "revision": 2,
+  "revision": 3,
   "mpv_repository": "mpv-player/mpv",
   "msys2_environment": "UCRT64",
   "lua_runtime": "luajit",
