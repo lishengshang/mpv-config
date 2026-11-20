@@ -19,6 +19,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('directory', type=Path)
     parser.add_argument('--source', choices=['huggingface', 'modelscope'], default='huggingface')
+    parser.add_argument('--only', choices=['qwen', 'sensevoice'])
     args = parser.parse_args()
     downloads = args.directory.resolve().parent / 'downloads'
     os.environ['HF_HOME'] = str(downloads / 'huggingface')
@@ -28,6 +29,8 @@ def main():
     from huggingface_hub import HfApi, snapshot_download
     from download_qwen_models import modelscope_weight
     for name, (repo, revision, patterns) in MODELS.items():
+        if args.only and not name.startswith(args.only + '/'):
+            continue
         folder = args.directory / name
         info = HfApi().model_info(repo, revision=revision, files_metadata=True)
         use_mirror = args.source == 'modelscope' and repo.startswith('Qwen/')

@@ -29,7 +29,7 @@
 
 `tools/` 顶层保留 Windows 操作入口，普通用户按需使用即可；子目录包含播放器会调用的辅助程序，请随配置一起保留。配置检查需要 Python 3.10+，优先使用 mpv 同级的便携 Python；检查通过不代表 GPU 或字幕已在你的电脑上验收。
 
-播放器预发布、源码配置和可选组件是不同下载内容。公开组件清单尚未接入发行配置，不能把仓库源码或播放器候选包当作离线 AI/VS 完整版；使用预发布前核对对应说明中的依赖与已测范围。发行流程见 [发行说明](docs/config-checks.md#正式版跟随与预发布)。
+从 [GitHub Releases](https://github.com/lishengshang/mpv-config/releases) 下载 `player-…-windows-x64.zip` 并解压。普通播放打开 `MPV/mpv.exe`。带 `MPV/first-setup.cmd` 的发行包可双击该入口联网安装字幕后端或 RTX 增强，按需选择。具体硬件条件、下载来源与迁移用法见 [组件安装与迁移](docs/config-checks.md#组件安装与迁移)。
 
 PS：自行编辑文本时使用 UTF-8、LF；脚本选项的注释单独占行，避免改变参数值。
 
