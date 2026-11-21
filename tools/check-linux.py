@@ -19,6 +19,61 @@ def wait_for(probe, ready, description):
     raise RuntimeError(description)
 
 
+def check_quality_controls(command, read):
+    def expect(property_name, value):
+        wait_for(lambda: read(property_name), lambda actual: actual == value,
+                 f"{property_name} did not reach {value!r}")
+
+    original_shaders = read("glsl-shaders")
+    original_scale = read("scale")
+    original_deband = read("deband")
+    custom_shaders = ["~~/shaders/igv/adaptive-sharpen.glsl"]
+    command("set_property", "glsl-shaders", custom_shaders)
+    command("keypress", "Alt+1")
+    expect("glsl-shaders", [
+        "~~/shaders/igv/FSRCNNX_x2_8-0-4-1.glsl", "~~/shaders/igv/SSimDownscaler.glsl",
+    ])
+    command("keypress", "Alt+7")
+    expect("glsl-shaders", [
+        "~~/shaders/nnedi3/nnedi3-nns32-win8x4.glsl", "~~/shaders/igv/SSimDownscaler.glsl",
+    ])
+    command("keypress", "Ctrl+0")
+    expect("glsl-shaders", custom_shaders)
+    command("set_property", "glsl-shaders", original_shaders)
+
+    command("script-message-to", "quality", "select", "deband", "DeBand-medium")
+    expect("deband-iterations", 2)
+    command("keypress", "D")
+    expect("deband", original_deband)
+    command("script-message-to", "quality", "select", "scale", "HQ")
+    expect("scale", "ewa_lanczossharp")
+    command("script-message-to", "quality", "restore-all")
+    expect("scale", original_scale)
+
+
+def check_audio_controls(command, read, menu_open):
+    original = read("af")
+    command("af", "add", "@test-volume:volume=0.8")
+    existing = read("af")
+
+    for keys, name in ((("HOME",), "dynaudnorm"), (("HOME", "DOWN"), "loudnorm"), (("END",), None)):
+        command("script-message-to", "uosc", "show-submenu", "音频 > 音量均衡")
+        wait_for(menu_open, bool, "Audio normalization menu did not open")
+        for key in keys:
+            command("keypress", key)
+        command("keypress", "ENTER")
+        wait_for(menu_open, lambda visible: not visible, "Audio normalization menu did not close")
+        filters = read("af")
+        if name is None:
+            assert filters == existing
+        else:
+            assert filters[:-1] == existing
+            assert filters[-1]["label"] == "audio-normalization"
+            assert name in json.dumps(filters[-1])
+
+    command("set_property", "af", original)
+
+
 def check_player(config, root, opened, selected, episode_count):
     ipc_path = root / "mpv.sock"
     log_path = root / "mpv.log"
@@ -74,6 +129,8 @@ def check_player(config, root, opened, selected, episode_count):
                         and entry["filename"].endswith(".mp4")
                         for entry in read("playlist")
                     )
+                    check_quality_controls(command, read)
+                    check_audio_controls(command, read, menu_open)
                     command("keypress", "F5")
                     wait_for(menu_open, bool, "F5 did not open the uosc playlist")
                     command("keypress", "END")
@@ -111,7 +168,8 @@ def main():
         first = season / "第 01 集.mp4"
         subprocess.run([
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
-            "color=blue:size=80x46:rate=15:duration=2", "-c:v", "mpeg4", str(first),
+            "color=blue:size=80x46:rate=15:duration=2", "-f", "lavfi", "-i",
+            "sine=frequency=440:duration=2", "-c:v", "mpeg4", "-c:a", "aac", str(first),
         ], check=True, timeout=10)
         selected = season / "第 02 集 + % # ?.mp4"
         selected.hardlink_to(first)
@@ -123,7 +181,7 @@ def main():
         check_player(config, root, f"mpv://{quote(url, safe='')}", selected, episode_count)
         check_player(config, root, f"mpv://{url}", selected, episode_count)
         check_player(config, root, selected.as_uri(), selected, episode_count)
-    print("OK: OpenList URLs, WebDAV path, 33 items, F5 selection and current-directory browser")
+    print("OK: OpenList playlist, quality preset restore, and audio normalization")
 
 
 if __name__ == "__main__":
