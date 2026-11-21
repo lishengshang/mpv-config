@@ -16,6 +16,7 @@ local function restore(group)
     local profile = active[group]
     if profile and not apply(profile, 'restore') then return false end
     active[group] = nil
+    mp.set_property_native('user-data/quality/selected', active)
     return true
 end
 
@@ -27,6 +28,7 @@ local function select(group, profile)
         mp.osd_message('已关闭：' .. profile)
     elseif apply(profile, 'apply') then
         active[group] = profile
+        mp.set_property_native('user-data/quality/selected', active)
         mp.osd_message('画质：' .. profile)
     end
 end

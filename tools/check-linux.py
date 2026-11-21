@@ -59,12 +59,15 @@ def check_audio_controls(command, read, menu_open):
     existing = read("af")
 
     for keys, name in ((("HOME",), "dynaudnorm"), (("HOME", "DOWN"), "loudnorm"), (("END",), None)):
-        command("script-message-to", "uosc", "show-submenu", "音频 > 音量均衡")
+        command("script-message-to", "menu_ui", "open", "音频 > 音量均衡")
         wait_for(menu_open, bool, "Audio normalization menu did not open")
         for key in keys:
             command("keypress", key)
         command("keypress", "ENTER")
-        wait_for(menu_open, lambda visible: not visible, "Audio normalization menu did not close")
+        label = {"dynaudnorm": "动态均衡", "loudnorm": "响度标准化", None: "关闭"}[name]
+        wait_for(lambda: menu_entry(read, "音频 > 音量均衡 > " + label).get("active"), bool,
+                 "Audio normalization selection was not updated")
+        assert menu_open()
         filters = read("af")
         if name is None:
             assert filters == existing
@@ -72,6 +75,8 @@ def check_audio_controls(command, read, menu_open):
             assert filters[:-1] == existing
             assert filters[-1]["label"] == "audio-normalization"
             assert name in json.dumps(filters[-1])
+        command("script-message-to", "uosc", "close-menu", "menu-ui")
+        wait_for(menu_open, lambda visible: not visible, "Audio normalization menu did not close")
 
     command("set_property", "af", original)
 
@@ -165,6 +170,60 @@ def menu_open(read):
                for binding in read("input-bindings"))
 
 
+def menu_entry(read, item_id):
+    menu = read("user-data/menu-ui/menu") or {}
+    items = list(menu.get("items", []))
+    while items:
+        item = items.pop()
+        if item.get("id") == item_id:
+            return item
+        items.extend(item.get("items", []))
+    return {}
+
+
+def check_menu_controls(command, read):
+    command("keypress", "F4")
+    wait_for(lambda: read("user-data/uosc/menu/type"), lambda mode: mode == "menu-ui",
+             "F4 did not show the dynamic menu")
+    command("set_property", "mute", True)
+    wait_for(lambda: menu_entry(read, "音频 > 静音").get("active"), bool,
+             "The mute indicator did not update")
+    command("set_property", "mute", False)
+    wait_for(lambda: menu_entry(read, "音频 > 静音").get("active"), lambda value: value is False,
+             "The mute indicator did not clear")
+    command("script-message-to", "uosc", "close-menu", "menu-ui")
+    wait_for(lambda: menu_open(read), lambda visible: not visible, "The main menu did not close")
+
+    command("script-message-to", "menu_ui", "open", "画面 > 宽高比")
+    wait_for(lambda: menu_open(read), bool, "Aspect ratio choices did not open")
+    command("keypress", "HOME")
+    command("keypress", "DOWN")
+    command("keypress", "ENTER")
+    wait_for(lambda: menu_entry(read, "画面 > 宽高比").get("items", [{}, {}])[1].get("active"), bool,
+             "The selected aspect ratio was not highlighted")
+    assert abs(read("video-aspect-override") - (4 / 3)) < 0.001
+    command("set", "video-aspect-override", "no")
+    command("script-message-to", "uosc", "close-menu", "menu-ui")
+    wait_for(lambda: menu_open(read), lambda visible: not visible, "Aspect ratio panel did not close")
+
+    command("keypress", "F8")
+    menu = wait_for(lambda: read("user-data/menu-ui/menu"), lambda value: value and value["title"] == "选择轨道",
+                    "F8 did not display the track panel")
+    assert [item["title"] for item in menu["items"]] == ["视频", "音频", "主字幕", "次字幕"]
+    command("script-message-to", "uosc", "close-menu", "menu-ui")
+    wait_for(lambda: menu_open(read), lambda visible: not visible, "The track panel did not close")
+
+    command("script-message-to", "menu_ui", "open", "打开与文件")
+    wait_for(lambda: menu_open(read), bool, "The file menu did not open")
+    files = menu_entry(read, "打开与文件")["items"]
+    index = next(i for i, item in enumerate(files, 1) if item["id"] == "打开与文件 > 播放历史…")
+    command("script-message-to", "uosc", "select-menu-item", "menu-ui", str(index), "打开与文件")
+    command("keypress", "ENTER")
+    wait_for(lambda: read("user-data/mpv/console/open"), bool, "The native watch history did not open")
+    command("keypress", "ESC")
+    wait_for(lambda: read("user-data/mpv/console/open"), lambda opened: not opened, "The native history did not close")
+
+
 def seek(command, read, target):
     wait_for(lambda: read("time-pos"), lambda pos: pos is not None, "Playback did not start")
     command("seek", target, "absolute+exact")
@@ -189,9 +248,10 @@ def check_library(config, root, selected, episode_count):
                  "OpenList did not expand the directory")
         position = seek(command, read, 0.8)
         assert read("save-watch-history")
+        check_menu_controls(command, read)
         original_id = read("playlist")[read("playlist-playing-pos")]["id"]
 
-        command("script-message-to", "uosc", "show-submenu", "播放 > 播放列表整理")
+        command("script-message-to", "menu_ui", "open", "播放 > 播放列表整理")
         wait_for(lambda: menu_open(read), bool, "Sort menu absent")
         command("keypress", "HOME")
         command("keypress", "DOWN")
@@ -353,7 +413,7 @@ def main():
         check_library(config, root, selected, episode_count)
         source = make_media_fixture(root)
         check_media_tools(config, root, source)
-    print("OK: OpenList, quality, audio, local bookmarks, playlists, chapters and subtitle exports")
+    print("OK: OpenList, dynamic menus, quality, audio, bookmarks, playlists, chapters and subtitle exports")
 
 
 if __name__ == "__main__":

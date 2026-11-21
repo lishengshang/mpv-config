@@ -22,8 +22,9 @@ git -C ~/.config/mpv pull --ff-only origin linux
 
 ## 操作
 
-- 右键或 `F4` 打开分组菜单。按 `F5` 或点底栏列表图标选集。按 `o` 或 `Ctrl+O` 浏览当前文件所在目录。
-- `F6` 选音频输出，`F7` 选章节，`F8` 查看所有轨道，`F9` 选视频轨，`F10` 选音轨，`F11` 选字幕。`Alt+F11` 选次字幕。
+- 右键、底栏菜单按钮或 `F4` 打开动态菜单。静音、循环、画质和音量均衡会显示当前状态。宽高比、声道输出和次字幕可以直接选择。
+- 按 `F5` 或点底栏列表图标选集。按 `o` 或 `Ctrl+O` 浏览当前文件所在目录。
+- `F6` 选音频输出，`F7` 选章节，`F8` 打开视频、音频、主字幕和次字幕分组的轨道面板。`F9` 选视频轨，`F10` 选音轨，`F11` 选主字幕，`Alt+F11` 选次字幕。
 - 左右方向键跳 5 秒，按住 `Shift` 精确跳 1 秒。`Ctrl+Z` 撤销跳转，`Ctrl+X` 重做。用 `[` 和 `]` 调倍速，退格键恢复 1 倍。
 - `z` / `x` 调字幕延迟，`Ctrl+,` / `Ctrl+.` 调音频延迟。`s` 截图，图片保存在 `~/Pictures/mpv`。
 - `Ctrl+←` / `Ctrl+→` 跳到上一条／下一条字幕。先按 `g`，再按 `l` 或 `Shift+L` 打开主字幕／次字幕台词列表。右键「字幕」可以调整次字幕和切换字体。mpv 会为当前视频加载同目录 `Fonts` 或 `fonts` 中的字体。
@@ -81,12 +82,12 @@ git ls-remote --refs origin refs/heads/dev
 dev_base=3da305a9bc0acf1a6fc3659d765bd6f690b7d028
 git fetch --no-tags origin refs/heads/dev
 git diff --stat "$dev_base" FETCH_HEAD -- input.conf mpv.conf profiles.conf \
-    script-opts/uosc.conf script-opts/thumbfast.conf scripts/uosc scripts/thumbfast.lua scripts/undoredo.lua \
+    script-opts/uosc.conf script-opts/thumbfast.conf scripts/uosc scripts/menu-ui.lua scripts/thumbfast.lua scripts/undoredo.lua \
     scripts/sub-fonts-dir-auto.lua scripts/{simplebookmark,chapterskip,chapter-make-read,playlistmanager}.lua \
     scripts/sub_export.lua scripts/autosubsync/ shaders/
 ```
 
-对照 mpv 默认键位、`#menu:` 菜单项和脚本入口。运行 `git diff --check` 和 `python3 tools/check-linux.py`，验证 OpenList 的 `F5`、画质恢复、音量均衡、书签、播放列表和字幕导出。本机安装 `alass` 时会检查双音轨字幕对轴。涉及 OpenList 时再用实际挂载打开一集。涉及 Shader 时，用 GPU 渲染验证。
+对照 uosc 的外观、mpv 默认键位、`#menu:` 菜单项和脚本入口。`#@choices=属性` 用于从菜单直接选择选项。运行 `git diff --check` 和 `python3 tools/check-linux.py`，验证动态菜单、OpenList 的 `F5`、画质恢复、音量均衡、书签、播放列表和字幕导出。本机安装 `alass` 时会检查双音轨字幕对轴。涉及界面或 Shader 时，用 GPU 渲染验证。
 
 审核完毕后，在同次 Linux 提交更新本节的 `dev` 基线和比较链接。机器地址与播放记录留在本机。发布时明确推送 `linux`。
 
