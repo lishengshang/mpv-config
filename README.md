@@ -56,9 +56,18 @@ mount_path=~/Videos/OpenList
 
 浏览器沿用现有的 `mpv://` 关联。配置会在挂载中查找与本站下载、代理或 WebDAV 路径对应的媒体文件；挂载里找不到对应文件时，mpv 继续播放原链接。
 
+## 书签、章节与导出
+
+- 「打开与文件 → 书签」可添加文件书签或进度书签，也可以搜索、打开和删除书签。打开 OpenList 书签后，用 `F5` 选同目录其他集。播放历史可从同一菜单或用 mpv 默认的 `g`、`h` 打开。
+- 「播放 → 播放列表整理」可按文件名自然排序、打乱和保存 M3U8。排序和打乱时当前项继续播放。M3U8 记录挂载后的绝对路径，可在 mpv 里重新打开。
+- 进入标有片头、片尾的章节时，播放器会提示用「播放 → 片头片尾 → 跳过当前段」。没有章节时，可用该菜单为当前视频标记起点和终点。「播放 → 章节编辑」可添加章节、修改标题和时间、删除章节，选「保存章节修改」后下次打开会读取本机编辑。也可把章节导出为 OGM。
+- 「字幕 → 同步 → 按当前音轨自动对轴」用 FFmpeg 和 `alass` 对齐主文本字幕。完成后会保存一份新字幕，并在音轨与字幕选择仍相同时加载。可单独导出当前内封文本字幕或 PGS 字幕。
+
+书签、章节修改和跳段标记保存在 mpv 的 XDG 状态目录，通常是 `~/.local/state/mpv/`。播放列表、字幕和 OGM 保存在 `~/Videos/mpv-exports/` 的对应子目录。写入位置可在本机用 `script-opts/local-files.conf` 的 `state_dir` 和 `export_dir` 指定。
+
 ## 从 Windows 同步配置
 
-`dev` 提供 Windows 配置，`linux` 独立发布。每次先核对新的 `dev` 提交，再按功能把通用改动移到 `linux`。同步范围包含基础播放和可在 mpv 内运行的 GLSL 画质预设。图形和音频后端、路径分隔符、WebDAV 映射按 Linux 环境设置。
+`dev` 提供 Windows 配置，`linux` 独立发布。每次先核对新的 `dev` 提交，再按功能把通用改动移到 `linux`。同步范围包含基础播放、可在 mpv 内运行的 GLSL 画质预设，以及书签、章节、列表和导出工具。图形和音频后端、文件路径、WebDAV 映射和本机保存按 Linux 环境设置。
 
 本轮已审查的 `dev` 基线为 `3da305a9bc0acf1a6fc3659d765bd6f690b7d028`。可先查看远端提交号，或者打开 GitHub 看最近的变化。[查看 dev 更新](https://github.com/lishengshang/mpv-config/compare/3da305a9bc0acf1a6fc3659d765bd6f690b7d028...dev)
 
@@ -73,10 +82,11 @@ dev_base=3da305a9bc0acf1a6fc3659d765bd6f690b7d028
 git fetch --no-tags origin refs/heads/dev
 git diff --stat "$dev_base" FETCH_HEAD -- input.conf mpv.conf profiles.conf \
     script-opts/uosc.conf script-opts/thumbfast.conf scripts/uosc scripts/thumbfast.lua scripts/undoredo.lua \
-    scripts/sub-fonts-dir-auto.lua shaders/
+    scripts/sub-fonts-dir-auto.lua scripts/{simplebookmark,chapterskip,chapter-make-read,playlistmanager}.lua \
+    scripts/sub_export.lua scripts/autosubsync/ shaders/
 ```
 
-对照新键位、`#menu:` 菜单项和脚本入口，确认命令在 Linux 可用。运行 `git diff --check` 和 `python3 tools/check-linux.py`。回归检查通过临时片段验证第 2 项起播、`F5` 选集、`o` 定位目录、画质恢复和音量均衡。涉及 OpenList 时再用实际挂载打开一集。涉及 Shader 时，用 GPU 渲染确认实际出帧。
+对照 mpv 默认键位、`#menu:` 菜单项和脚本入口。运行 `git diff --check` 和 `python3 tools/check-linux.py`，验证 OpenList 的 `F5`、画质恢复、音量均衡、书签、播放列表和字幕导出。本机安装 `alass` 时会检查双音轨字幕对轴。涉及 OpenList 时再用实际挂载打开一集。涉及 Shader 时，用 GPU 渲染验证。
 
 审核完毕后，在同次 Linux 提交更新本节的 `dev` 基线和比较链接。机器地址与播放记录留在本机。发布时明确推送 `linux`。
 
