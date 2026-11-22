@@ -4,12 +4,14 @@
 
 ## 待验收：Base 与可选扩展
 
-- 转正式版前，使用公开候选在干净 Windows 机器复测安装和旧版迁移，补齐 Whisper CUDA 与其余 RTX 预设验收。验收入口见 [配置检查](docs/config-checks.md#正式版跟随与预发布)。\n\n## 在途：组件发行与正式版跟随
+- 转正式版前，使用公开候选在干净 Windows 机器复测安装和旧版迁移，补齐 Whisper CUDA 与其余 RTX 预设验收。验收入口见 [配置检查](docs/config-checks.md#正式版跟随与预发布)。
+
+## 在途：组件发行与正式版跟随
 
 - 目标：组件分包/一键补齐/离线整合；用户已选“跟随官方正式 tag 自建 Windows 全功能播放器，自动预发布，GPU/字幕验收后人工晋级”。
 - 所有者：Codex 主 agent；后续范围为公开组件清单与候选整合，发行入口见 `docs/config-checks.md`。
 - 待验收：干净机器部署、真实长片/课程字幕与其他硬件；r2 和后续发布基线见 `docs/config-checks.md` 的组件章节。
-- 待处理：将本机组件快照核对许可/兼容范围后转为公开固定资产，并接入发行清单；`release/manifest.json` 的组件清单仍空，不能称公开离线完整版。本机工具及迁移证据见 `docs/config-checks.md` 的组件章节。
+- 完整版待发行。当前使用的 Faster-Whisper-XXL 独立程序缺少已核实的公开再分发授权，VS 等组件也需补齐来源和许可清单。`release/manifest.json` 的公开组件清单仍为空。本机组包和迁移入口见 [配置检查](docs/config-checks.md#组件安装与迁移)。
 - 来源材料缺口：本机媒体快照仅含 FFmpeg/FFprobe，无随包许可/源码材料；VS/Whisper/Qwen 的二进制、模型和依赖仍缺完整上游来源记录。归档内容清点见忽略的 `cache/component-transport-20261021/contents-inventory.json`；分卷成功不代表许可审核或公开发行就绪。
 
 ## 下一步与验证边界

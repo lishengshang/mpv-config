@@ -458,7 +458,7 @@ def archive_release(args):
              'GPU rendering, VS output, AI inference and fresh-machine portability require acceptance before stable promotion.\n\n'
              'Optional components are versioned separately. This candidate does not claim a complete offline AI/VS installation.\n')
     if is_base:
-        notes += ('\nExtract the Windows x64 ZIP and run MPV/start-mpv.cmd. '
+        notes += ('\n## Windows x64 Base\n\nExtract the ZIP and run MPV/start-mpv.cmd. '
                   'Whisper and RTX VapourSynth can be installed from the in-player Extensions menu '
                   'or MPV/first-setup.cmd. Extensions are disabled by default.\n')
     elif (player / 'first-setup.cmd').is_file():
