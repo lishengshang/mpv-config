@@ -23,6 +23,7 @@ class UpstreamChecks(unittest.TestCase):
         self.run_git(self.origin, 'init', '--bare')
         self.run_git(root, 'clone', str(self.upstream), str(self.local))
         self.run_git(self.local, 'remote', 'set-url', 'origin', str(self.origin))
+        self.run_git(self.local, 'push', 'origin', 'refs/heads/master:refs/heads/master')
         self.run_git(self.local, 'checkout', '-b', 'dev')
         self.commit(self.local, 'local.txt', 'custom\n')
         self.run_git(self.local, 'push', 'origin', 'dev')
@@ -122,9 +123,9 @@ class UpstreamChecks(unittest.TestCase):
     def test_closed_revision_is_not_reopened_every_week(self):
         tip = self.commit(self.upstream, 'new.txt', 'first\n')
         self.pulls = [{'state': 'closed', 'head': {'sha': tip}}]
-        before = self.run_git(self.origin, 'show-ref')
         self.assertEqual(self.check(), 'closed')
-        self.assertEqual(before, self.run_git(self.origin, 'show-ref'))
+        self.assertEqual(self.remote_tip(), tip)
+        self.assertTrue(all(payload is None for _, payload in self.api_calls))
 
     def test_merged_upstream_stops_future_publication(self):
         tip = self.commit(self.upstream, 'new.txt', 'first\n')
@@ -135,6 +136,16 @@ class UpstreamChecks(unittest.TestCase):
         self.run_git(self.local, 'push', 'origin', f'{merged}:refs/heads/dev')
         self.api_calls.clear()
         self.assertEqual(self.check(), 'unchanged')
+        self.assertEqual(self.api_calls, [])
+
+    def test_master_fast_forwards_when_dev_already_contains_the_update(self):
+        tip = self.commit(self.upstream, 'new.txt', 'upstream\n')
+        self.run_git(self.local, 'fetch', str(self.upstream), 'master')
+        merged = self.run_git(self.local, 'commit-tree', f'{tip}^{{tree}}',
+                              '-p', self.original[0], '-p', tip, '-m', 'manual merge')
+        self.run_git(self.local, 'push', 'origin', f'{merged}:refs/heads/dev')
+        self.assertEqual(self.check(), 'unchanged')
+        self.assertEqual(self.remote_tip(), tip)
         self.assertEqual(self.api_calls, [])
 
     def test_fetch_failure_is_not_no_updates(self):

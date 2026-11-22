@@ -1,4 +1,4 @@
-"""Fetch configuration upstream; publish only a review branch and a manual-merge PR."""
+"""Mirror upstream configuration to master and prepare a manual-merge PR into dev."""
 import argparse
 import json
 import os
@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 REPOSITORY = 'lishengshang/mpv-config'
 UPSTREAM = 'https://github.com/dyphire/mpv-config.git'
 BASE = 'dev'
-BRANCH = 'codex/upstream-sync'
+BRANCH = 'master'
 UPSTREAM_REF = 'refs/remotes/upstream-sync/master'
 
 
@@ -50,15 +50,24 @@ def report(message):
 
 def sync(root, publish=False, upstream=UPSTREAM):
     git(root, 'fetch', '--no-tags', 'origin',
-        f'+refs/heads/{BASE}:refs/remotes/origin/{BASE}')
+        f'+refs/heads/{BASE}:refs/remotes/origin/{BASE}',
+        f'+refs/heads/{BRANCH}:refs/remotes/origin/{BRANCH}')
     git(root, 'fetch', '--no-tags', upstream,
         f'+refs/heads/master:{UPSTREAM_REF}')
     base = git(root, 'rev-parse', f'refs/remotes/origin/{BASE}').stdout.strip()
     tip = git(root, 'rev-parse', UPSTREAM_REF).stdout.strip()
     # A failed fetch or an unrelated history must never be reported as "no updates".
     git(root, 'merge-base', base, tip)
+    if publish:
+        previous = git(root, 'rev-parse', f'refs/remotes/origin/{BRANCH}').stdout.strip()
+        if not ancestor(root, previous, tip):
+            raise RuntimeError('master contains manual changes or upstream rewrote history. '
+                               'Preserving master; inspect the divergence manually.')
+        if previous != tip:
+            git(root, 'push', 'origin', f'{tip}:refs/heads/{BRANCH}')
+            report(f'master synced to {tip}.')
     if ancestor(root, tip, base):
-        report('No upstream updates. No branch, commit or pull request was created.')
+        report('dev already contains the upstream revision. No pull request was created.')
         return 'unchanged'
 
     count = git(root, 'rev-list', '--count', f'{base}..{tip}').stdout.strip()
@@ -78,20 +87,6 @@ def sync(root, publish=False, upstream=UPSTREAM):
         report('This upstream revision already has a closed PR; leaving it for manual handling.')
         return 'closed'
 
-    ref = f'refs/heads/{BRANCH}'
-    remote = git(root, 'ls-remote', '--exit-code', 'origin', ref, allowed=(0, 2))
-    if remote.returncode == 0:
-        git(root, 'fetch', '--no-tags', 'origin', ref)
-        previous = git(root, 'rev-parse', 'FETCH_HEAD').stdout.strip()
-        if not ancestor(root, previous, tip):
-            raise RuntimeError('Sync branch contains manual changes or upstream rewrote history. '
-                               'Preserving the branch and PR; handle them manually.')
-        if previous != tip:
-            # Fast-forward only: no force push and no overwrite of manual conflict fixes.
-            git(root, 'push', 'origin', f'{tip}:{ref}')
-    else:
-        git(root, 'push', 'origin', f'{tip}:{ref}')
-
     if opened:
         report(f'Existing PR updated in place: {opened[0]["html_url"]}')
         return 'updated'
@@ -103,8 +98,8 @@ def sync(root, publish=False, upstream=UPSTREAM):
                 '解决冲突并完成配置和播放验收，再手动合并。\n\n'
                 '请使用 **Create a merge commit**，保留上游祖先关系；'
                 'Squash/Rebase 合并会导致后续检查重复识别旧提交。\n\n'
-                '若需要在同步分支上修复冲突，后续自动检查会保留你的提交并停止更新，'
-                '请先完成该 PR 的处理。使用默认 GITHUB_TOKEN 创建的 PR，'
+                'master 是上游镜像。有冲突时在独立工作区解决并验证，保留 master 的上游提交。'
+                '使用默认 GITHUB_TOKEN 创建的 PR，'
                 '检查可能需要你在 GitHub 页面批准运行。\n\n'
                 '上游：https://github.com/dyphire/mpv-config/commits/master/',
         'maintainer_can_modify': True,
@@ -115,7 +110,7 @@ def sync(root, publish=False, upstream=UPSTREAM):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--publish', action='store_true', help='Push review branch and create PR')
+    parser.add_argument('--publish', action='store_true', help='Fast-forward master and open a review PR when needed')
     args = parser.parse_args()
     try:
         sync(Path(__file__).resolve().parents[2], args.publish)
