@@ -1,3 +1,4 @@
+.gitattributes text eol=lf
 *.conf      linguist-language=INI
 *.hook      linguist-language=GLSL
 *.conf      text eol=lf
@@ -10,3 +11,11 @@
 *.md        text eol=lf
 *.js        text eol=lf
 *.py        text eol=lf
+*.vpy       text eol=lf
+*.ps1       text eol=lf
+*.cmd       text eol=lf
+*.sh        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+# Unified diffs use a space prefix on empty context lines.
+release/patches/*.patch text eol=lf whitespace=-blank-at-eol,-blank-at-eof

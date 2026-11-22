@@ -461,13 +461,11 @@ function read_danmaku_source_record(path)
                 delay_segments = nil
             end
 
-            local existing = DANMAKU.sources[source]
             DANMAKU.sources[source] = {
                 from = from,
                 blocked = blocked,
                 delay_segments = delay_segments,
                 from_history = true,
-                data = existing and existing.data,
             }
         end
     else
@@ -664,7 +662,6 @@ end
 
 function init(path)
     if not path then return end
-    read_danmaku_source_record(path)
     local dir = get_parent_directory(path)
     local filename = mp.get_property('filename/no-ext')
     local video = mp.get_property_native("current-tracks/video")
@@ -692,13 +689,15 @@ mp.register_event("file-loaded", function()
     local dir = get_parent_directory(path)
     local filename = mp.get_property('filename/no-ext')
     local video = mp.get_property_native("current-tracks/video")
+    local fps = mp.get_property_number("container-fps", 0)
     local duration = mp.get_property_number("duration", 0)
 
-    -- 先读取历史源，确保不满足自动加载条件时仍可手动使用。
+    if not path then return end
     read_danmaku_source_record(path)
 
-    -- 网络流在 file-loaded 时的 container-fps 可能尚未就绪。
-    if not video or video["image"] or video["albumart"] or duration < 60 then
+    -- 网络流在 file-loaded 时可能还没有帧率；本地短片和低帧率视频仍跳过自动加载。
+    if not video or video["image"] or video["albumart"] or duration < 60 or
+        (not is_protocol(path) and fps < 23) then
         return
     end
 

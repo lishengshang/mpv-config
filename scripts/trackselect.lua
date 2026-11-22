@@ -250,28 +250,20 @@ local function trackselect()
         tracklist_changed = true
     end
 
-    -- Prefer single external subtitle when enabled and conditions are met
-    local sub_locked = false
-    if options.prefer_single_external_sub then
-        local external_sub_count = 0
-        local single_external_sub = nil
-        for _, track in ipairs(tracklist) do
-            if track.type == "sub" and track.external and track.codec ~= "null" then
-                external_sub_count = external_sub_count + 1
-                single_external_sub = track
-            end
-        end
-        if external_sub_count == 1 and single_external_sub then
-            local excluded_words = options["excluded_sub_words"]
-            if excluded_words == "" or not contains(single_external_sub, excluded_words, "title") then
-                tracks.sub.best = single_external_sub
-                sub_locked = true
-            end
-        end
-    end
-
+    local prefer_external = options.prefer_single_external_sub and (options.force or mp.get_property("sid", "auto") == "auto")
+    local external_sub_count, single_external_sub = 0, nil
     for _, track in ipairs(tracklist) do
         sanitize_title(track, path, filename, media_title)
+        if prefer_external and track.type == "sub" and track.external and track.codec ~= "null" then
+            external_sub_count = external_sub_count + 1
+            single_external_sub = track
+        end
+    end
+    local sub_locked = external_sub_count == 1 and
+        not contains(single_external_sub, options.excluded_sub_words, "title")
+    if sub_locked then tracks.sub.best = single_external_sub end
+
+    for _, track in ipairs(tracklist) do
         if options.smart_keep and last[track.type] ~= nil and
             comparison(last[track.type].lang, track.lang) and
             track.codec ~= "null" and last[track.type].codec == track.codec and

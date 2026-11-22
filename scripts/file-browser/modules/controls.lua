@@ -22,7 +22,10 @@ function controls.open()
     end
 
     if o.set_shared_script_properties then utils.shared_script_property_set('file_browser-open', 'yes') end ---@diagnostic disable-line deprecated
-    if o.set_user_data then mp.set_property_bool('user-data/file_browser/open', true) end
+    if o.set_user_data then
+        mp.set_property_number('user-data/file_browser/opened-at', mp.get_time())
+        mp.set_property_bool('user-data/file_browser/open', true)
+    end
 
     if o.toggle_idlescreen then mp.commandv('script-message', 'osc-idlescreen', 'no', 'no_osd') end
     g.state.hidden = false

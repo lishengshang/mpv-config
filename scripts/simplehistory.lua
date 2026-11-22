@@ -1036,6 +1036,7 @@ function display_list(filter, sort, action)
 	if utils.shared_script_property_set then
 		utils.shared_script_property_set('simplehistory-menu-open', 'yes')
 	end
+	mp.set_property_number('user-data/simplehistory/opened-at', mp.get_time())
 	mp.set_property('user-data/simplehistory/menu-open', 'yes')
 	if o.toggle_idlescreen then mp.commandv('script-message', 'osc-idlescreen', 'no', 'no_osd') end --1.1.6# fix osc-idlescreen (value was yes for some reason)
 	list_drawn = true
@@ -1704,8 +1705,11 @@ function list_close_and_trash_collection()
 	end
 	mp.set_property('user-data/simplehistory/menu-open', 'no')
 	if o.toggle_idlescreen then mp.commandv('script-message', 'osc-idlescreen', 'yes', 'no_osd') end
+	search_active = false
 	unbind_list_keys()
 	unbind_search_keys()
+	unbind_keys(o.list_search_activate_keybind, 'list-search-activate')
+	unbind_keys(o.list_search_not_typing_mode_keybind, 'search_string_not_typing')
 	mp.set_osd_ass(0, 0, "")
 	list_drawn = false
 	list_cursor = 1
@@ -1713,11 +1717,15 @@ function list_close_and_trash_collection()
 	filterName = 'all'
 	list_pages = {}
 	search_string = ''
-	search_active = false
 	list_highlight_cursor = {}
 	sortName = nil
 end
 --End of LogManager (List Bind and Unbind)--
+
+-- Local panel coordination must close searches as well as the list itself.
+mp.register_script_message('close-list', function()
+	if list_drawn then list_close_and_trash_collection() end
+end)
 
 --LogManager Search Feature--
 function list_search_exit()

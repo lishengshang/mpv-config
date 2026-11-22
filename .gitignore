@@ -2,10 +2,18 @@
 *.xml
 *.txt
 config.json
+/local.conf
 
 cache/
 state/
 files/
 playlists/
+__pycache__/
 
 scripts/webtorrent.js
+
+.zcode/
+.workbuddy/
+.trae/
+.codex/
+.claude/

@@ -218,7 +218,8 @@ function show_message(text, time)
     message_timer.timeout = time or 3
     message_timer:kill()
     message_overlay:remove()
-    local message = string.format("{\\an%d\\pos(%d,%d)}%s", options.message_alignment,
+    local alignment = options.message_alignment ~= 0 and options.message_alignment or options.message_anlignment
+    local message = string.format("{\\an%d\\pos(%d,%d)}%s", alignment,
        options.message_x, options.message_y, text)
     local width, height = 1920, 1080
     local ratio = osd_width / osd_height

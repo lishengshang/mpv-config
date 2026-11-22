@@ -97,7 +97,7 @@ function get_blacklist_patterns(force)
                 local data = utils.parse_json(content)
                 if type(data) == "table" then
                     for _, e in ipairs(data) do
-                        if e.type == 0 and e.opened and e.filter then
+                        if type(e) == "table" and e.type == 0 and e.opened and type(e.filter) == "string" then
                             blacklist_patterns[#blacklist_patterns + 1] = e.filter
                         end
                     end

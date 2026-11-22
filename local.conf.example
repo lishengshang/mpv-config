@@ -1,0 +1,53 @@
+# local.conf 模板 —— 复制为 local.conf 后改成实际路径。local.conf 已被 .gitignore 排除。
+#
+# 用途:承载所有机器相关的绝对路径，让被跟踪的配置保持可移植。
+# 由 mpv.conf 末尾的 include="~~/local.conf" 载入；文件不存在时 mpv 只打印一行
+# "Failed to open ~~\local.conf" 后继续启动，不影响播放。
+#
+# 语法要点:script-opts 的键分隔符是连字符 "-"，不是冒号 ":"。
+# 写成 name:key=value 不会报错，但永远匹配不上（mpv 的 player/lua/options.lua:95
+# 用 identifier.."-" 作前缀匹配）。
+# script-opts 的优先级高于 script-opts/*.conf 文件，所以本文件可覆盖仓库内的默认值。
+
+# TorrServer 可执行文件。仅当 script-opts/mpv_torrserver.conf 里 torrserver_init=yes 时需要。
+# 下载:https://github.com/YouROK/TorrServer
+#script-opts-append=mpv_torrserver-torrserver_path=C:\path\to\TorrServer-windows-amd64.exe
+
+# faster-whisper 可执行文件，sub-fastwhisper.lua 的 AI 字幕后端。
+# 下载:https://github.com/Purfview/whisper-standalone-win/releases （用 Faster-Whisper-XXL_r245.4_windows.7z，
+# 约 1.4GB，解压后约 2.5GB；首次运行还会下载 Whisper 模型约 1.6GB。最新的 XXL Pro r3.256.1 是收费闭源版，别用）
+#script-opts-append=sub_fastwhisper-fast_whisper_path=C:\path\to\faster-whisper-xxl.exe
+# 组件部署工具会设置离线模型目录，避免迁移后重新下载模型。
+#script-opts-append=sub_fastwhisper-whisper_model_dir=C:/path/to/whisper/_models
+
+# 可选字幕翻译：兼容 Chat Completions 的接口，curl 需支持 --fail-with-body。
+# 配置 key 后，仅日语及其他非中文/英语的明确语种自动全文校准再翻译；中文/英语需手动触发。
+# 不配置 key 时仅生成原文字幕；自动规则可在 script-opts/sub_fastwhisper.conf 中关闭。
+#script-opts-append=sub_fastwhisper-api_url=https://your-provider.example/v1/chat/completions
+#script-opts-append=sub_fastwhisper-api_mode=your-model
+#script-opts-append=sub_fastwhisper-api_key=your-private-key
+
+# 三种 AI 后端统一安装／迁移：tools/setup-ai-subtitles.ps1 -ConfigureLocal
+# 默认根目录为用户的 .cache/mpv-ai；脚本填写以下路径及 output_path，不改私人接口与调参。
+# 运行环境在 runtimes/{whisper,qwen,sensevoice}，模型在 models/{whisper,qwen,sensevoice}，字幕在 subtitles。
+# Qwen3-ASR 备选：独立 Python 3.12 环境和本地模型；不复用 VS Python。
+#script-opts-append=sub_fastwhisper-qwen_python=C:/path/to/qwen-asr/.venv/Scripts/python.exe
+#script-opts-append=sub_fastwhisper-qwen_model=C:/path/to/qwen-asr/models/Qwen3-ASR-1.7B
+#script-opts-append=sub_fastwhisper-qwen_small_model=C:/path/to/mpv-ai/models/qwen/Qwen3-ASR-0.6B
+#script-opts-append=sub_fastwhisper-qwen_aligner=C:/path/to/qwen-asr/models/Qwen3-ForcedAligner-0.6B
+#script-opts-append=sub_fastwhisper-sensevoice_python=C:/path/to/mpv-ai/runtimes/sensevoice/python/python.exe
+#script-opts-append=sub_fastwhisper-sensevoice_model=C:/path/to/mpv-ai/models/sensevoice/SenseVoiceSmall
+#script-opts-append=sub_fastwhisper-output_path=C:/path/to/mpv-ai/subtitles
+
+# alass 可执行文件，autosubsync.lua 的字幕同步后端。
+# 默认值 alass_path=alass 是裸名，靠 mpv.exe 同目录或 PATH 解析，通常无需在此设置。
+#script-opts-append=autosubsync-alass_path=C:\path\to\alass.exe
+
+# assrt.net 字幕搜索 API token，sub-assrt.lua 使用。脚本内预设的是上游作者的 key，
+# 建议到 https://assrt.net 注册自己的，避免依赖别人的配额而随时失效。
+#script-opts-append=sub_assrt-api_token=你的token
+
+# HDRTray 的 HDRCmd.exe，toggleHDR.lua 用它切换 Windows HDR 显示模式。
+# 下载:https://github.com/res2k/HDRTray/releases （解压后取 HDRCmd.exe 即可，无需常驻托盘程序）
+# 未配置此项时 toggleHDR 不接管 HDR，也不告警；切换可能需要以管理员身份运行 mpv。
+#script-opts-append=toggleHDR-hdr_cmd_path=C:\path\to\HDRTray\HDRCmd.exe

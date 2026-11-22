@@ -19,9 +19,11 @@ function blacklist_get_state(force)
     local ext = tostring(path or ""):lower():match("%.([a-z]+)$")
     if (ext == "txt" or ext == "xml" or ext == "json") then
         state.ext = ext
-        local content = file_exists(path) and read_file(path)
-        if content then
-            state.exists = true
+        state.exists = utils.file_info(path) ~= nil
+        local content = state.exists and read_file(path)
+        if state.exists and not content then
+            state.parse_failed = true
+        elseif content then
             if ext == "txt" then
                 for _, line in ipairs(split_lines(content)) do
                     local pattern = line:match("^%s*(.-)%s*$")
@@ -45,7 +47,7 @@ function blacklist_get_state(force)
             elseif ext == "json" then
                 if content:sub(1, 3) == "\239\187\191" then content = content:sub(4) end
                 local data = utils.parse_json(content)
-                if type(data) ~= "table" then
+                if not content:match("^%s*%[") or type(data) ~= "table" then
                     state.parse_failed = true
                 else
                     for _, raw in ipairs(data) do

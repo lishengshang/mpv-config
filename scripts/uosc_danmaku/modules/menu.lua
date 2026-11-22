@@ -5,6 +5,7 @@ local unpack = unpack or table.unpack
 input_loaded, input = pcall(require, "mp.input")
 
 local input_requested_cbs, input_live_cbs = {}, {}
+
 local function input_open(cb)
     table.insert(input_requested_cbs, cb)
     input.get(cb)
@@ -505,7 +506,7 @@ function update_menu_uosc(menu_type, menu_title, menu_item, menu_footnote, menu_
     if on_close ~= nil then
         menu_props.on_close = on_close
     end
-    
+
     if selected_index ~= nil then
         menu_props.selected_index = selected_index
     end
@@ -2103,4 +2104,3 @@ mp.register_script_message("blacklist-deal", function(payload, arg, extra)
     if message then show_message("[弹幕屏蔽规则] " .. message, ok and 2 or 3) end
     if ok then mp.add_timeout(0.05, open_blacklist_menu) end
 end)
-

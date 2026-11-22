@@ -14,7 +14,7 @@
   {
     "git":"https://github.com/dyphire/mpv-scripts",
     "branch":"main",
-    "blacklist":"LICENSE|README.*%.md$|drcbox%.lua$|.-%-list%.lua$",
+    "blacklist":"LICENSE|README.*%.md$|drcbox%.lua$|.-%-list%.lua$|auto%-save%-state%.lua$|history%-bookmark%.lua$|hdr%-mode%.lua$",
     "dest":"~~/scripts"
   },
   {
@@ -59,7 +59,7 @@
   },
   {
     "git":"https://github.com/christoph-heinrich/mpv-quality-menu",
-    "whitelist":"qualityu%-menu%.lua$",
+    "whitelist":"quality%-menu%.lua$",
     "dest":"~~/scripts"
   },
   {
@@ -76,11 +76,6 @@
     "git":"https://github.com/CogentRedTester/mpv-file-browser",
     "whitelist":"favourites%.lua$|find%.lua$|home%-label%.lua$|url%-decode%.lua$|windir%.lua$|winroot%.lua$",
     "dest":"~~/script-modules/file-browser-addons"
-  },
-  {
-    "git":"https://gist.github.com/igv/8a77e4eb8276753b54bb94c1c50c317e",
-    "whitelist":"%.glsl$",
-    "dest":"~~/shaders/igv"
   },
   {
     "git":"https://gist.github.com/igv/a015fc885d5c22e6891820ad89555637",
@@ -113,6 +108,30 @@
     "git":"https://github.com/bloc97/Anime4K",
     "whitelist":"%.md$|%.glsl$",
     "blacklist":"tensorflow",
-    "dest":"~~/shaders/Anime4k"
+    "dest":"~~/shaders/Anime4K"
+  },
+  {
+    "git":"https://github.com/Tony15246/uosc_danmaku",
+    "branch":"main",
+    "whitelist":"%.lua$|%.md$|LICENSE$",
+    "dest":"~~/scripts/uosc_danmaku"
+  },
+  {
+    "git":"https://github.com/yosh-wang/mpv-hdr-auto-toggle",
+    "branch":"main",
+    "whitelist":"togglehdr%.lua$",
+    "dest":"~~/scripts"
+  },
+  {
+    "git":"https://github.com/yosh-wang/mpv-hdr-auto-toggle",
+    "branch":"main",
+    "whitelist":"togglehdr%.conf$",
+    "dest":"~~/script-opts"
+  },
+  {
+    "git":"https://github.com/yosh-wang/auto_bluray-ISO-",
+    "branch":"main",
+    "whitelist":"auto_bluray%.lua$",
+    "dest":"~~/scripts"
   }
 ]

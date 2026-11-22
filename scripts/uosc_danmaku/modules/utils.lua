@@ -522,16 +522,39 @@ function write_file(file_path, content)
     if type(file_path) ~= "string" or file_path == "" or content == nil then
         return false
     end
-    local file = io.open(file_path, "wb")
+    local suffix = "." .. tostring(utils.getpid())
+    local pending = file_path .. suffix .. ".pending"
+    local file = io.open(pending, "wb")
     if not file then return false end
-    file:write(content)
-    file:close()
+    local written = file:write(content)
+    local closed = file:close()
+    if not written or not closed then
+        os.remove(pending)
+        return false
+    end
+    if os.rename(pending, file_path) then return true end
+
+    -- Windows 的 rename 不能直接覆盖文件。先保留原文件，提交失败时恢复。
+    local old = utils.file_info(file_path)
+    local backup = file_path .. suffix .. ".previous"
+    if not old or not old.is_file or utils.file_info(backup) or not os.rename(file_path, backup) then
+        os.remove(pending)
+        return false
+    end
+    if not os.rename(pending, file_path) then
+        if not os.rename(backup, file_path) then
+            msg.error("无法恢复原文件，备份保留在 " .. backup)
+        end
+        os.remove(pending)
+        return false
+    end
+    os.remove(backup)
     return true
 end
 
 -- 应用额外的自定义标题替换规则
 function title_replace(title)
-    if not title then return title end 
+    if not title then return title end
     local content = options.title_replace
     if content == nil or content == "" then
         return title

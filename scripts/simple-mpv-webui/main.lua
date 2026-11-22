@@ -1,6 +1,10 @@
 require 'mp.options'
 require 'mp.msg'
 utils = require 'mp.utils'
+-- Local portable runtime lookup, independent of the process working directory.
+local portable_root = mp.command_native({'expand-path', '~~/../'})
+package.path = portable_root .. '/lua/?.lua;' .. portable_root .. '/lua/?/init.lua;' .. package.path
+package.cpath = portable_root .. '/?.dll;' .. package.cpath
 local socket = require("socket")
 local dec64 = require("mime").decode("base64")
 local url = require("socket.url")

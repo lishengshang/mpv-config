@@ -5,15 +5,15 @@ local inflate = require('modules/inflate')
 local user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 
 local TEMP_NAME_PATTERN = '^iqiyi_(.-)_(%d+)_(%d+)%.z$'
-local STALE_SECONDS = 3600 
+local STALE_SECONDS = 3600
 
 local function cleanup_iqiyi_temp(mode)
     local dir = DANMAKU_PATH
     if type(dir) ~= 'string' or dir == '' then return end
-    local entries = utils.readdir(dir)
+    local entries = utils.readdir(dir, 'files')
     if not entries then return end
     local now = os.time()
-    for name in pairs(entries) do
+    for _, name in ipairs(entries) do
         local pid = name:match(TEMP_NAME_PATTERN)
         if pid then
             local full = utils.join_path(dir, name)
@@ -27,8 +27,7 @@ local function cleanup_iqiyi_temp(mode)
                         and (now - (tonumber(info.mtime) or now)) > STALE_SECONDS
                 end
             end
-            if remove then
-                os.remove(full)
+            if remove and os.remove(full) then
                 msg.verbose('iqiyi: 已清理临时文件 ' .. name)
             end
         end

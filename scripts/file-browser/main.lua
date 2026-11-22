@@ -52,6 +52,8 @@ mp.register_script_message('evaluate-expressions', script_messages.evaluate_expr
 mp.register_script_message('run-statement', script_messages.run_statement)
 
 mp.register_script_message('browse-directory', controls.browse_directory)
+-- Local panel coordination closes selection modes and releases all browser keys.
+mp.register_script_message('close-browser', controls.close)
 mp.register_script_message("get-directory-contents", script_messages.get_directory_contents)
 
 --declares the keybind to open the browser
