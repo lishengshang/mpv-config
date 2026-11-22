@@ -72,6 +72,7 @@ def main():
     parser.add_argument('--full-config', action='store_true', help='Load actual root configuration with only the two test scripts')
     parser.add_argument('--management', action='store_true', help='Exercise the actual management menu, forced regeneration and explicit export')
     parser.add_argument('--segment', action='store_true', help='Exercise progressive output, cancellation and next-file cancellation')
+    parser.add_argument('--preview', action='store_true', help='Exercise the default Whisper preview from 20 seconds into a real media file')
     parser.add_argument('--fixed-segments', action='store_true', help='Compare fixed slices instead of silence boundaries (requires --segment)')
     parser.add_argument('--long-speech', action='store_true', help='Use the same long speech fixture as the segment comparison')
     parser.add_argument('--render', action='store_true', help='Render with D3D11 and capture partial/completed subtitles')
@@ -83,6 +84,9 @@ def main():
         parser.error('--segment requires Whisper without management/menu-switch')
     if args.fixed_segments and not args.segment:
         parser.error('--fixed-segments requires --segment')
+    if args.preview and (not args.media or args.segment or args.engine != 'whisper' or
+                         args.whisper_mode == 'balanced' or args.management or args.menu_switch):
+        parser.error('--preview requires local media and a non-batched Whisper run without menu staging')
     if args.timeout <= 0:
         parser.error('--timeout must be positive')
     if args.media and (not args.media.is_file() or args.long_speech):
@@ -184,6 +188,10 @@ def main():
             'asr-playback-second=' + second.as_posix(),
             'asr-playback-render=' + ('yes' if args.render else 'no'),
             'asr-playback-segment=' + ('yes' if args.segment else 'no')]
+    if args.preview:
+        opts.append('asr-playback-preview=yes')
+    else:
+        opts.append('sub_fastwhisper-whisper_preview=no')
     opts.extend(runtime_opts)
     opts.extend(qwen_opts)
     opts.append('asr-playback-timeout=' + str(args.timeout))
@@ -203,6 +211,8 @@ def main():
                '--vo=null', '--ao=null', '--pause=yes', '--idle=yes', '--keep-open=yes',
                '--save-position-on-quit=no', '--resume-playback=no', '--term-status-msg=', '--input-ipc-server=',
                '--log-file=' + str(log_path), str(first)]
+    if args.preview:
+        command.insert(1, '--start=20')
     if args.full_config:
         command.remove('--no-config')
         command.insert(1, '--msg-level=all=warn,sub_fastwhisper=info,test_ai_subtitles_playback=info')
@@ -258,7 +268,7 @@ def main():
         passed = passed and exported.is_file() and exported.read_bytes() == outputs[0].read_bytes()
         passed = passed and (real_root / 'management.png').is_file()
     if args.render:
-        required = ['completed.png'] + (['partial.png'] if args.segment else [])
+        required = ['completed.png'] + (['partial.png'] if args.segment or args.preview else [])
         passed = passed and all((real_root / name).is_file() and (real_root / name).stat().st_size > 1000 for name in required)
     report = dict(passed=bool(passed), exit_code=code, timed_out=timed_out,
                   source_folders_unchanged=before == after and source_unchanged,
@@ -275,6 +285,7 @@ def main():
     report['menu_switch'] = args.menu_switch
     report['management'] = args.management
     report['segment'] = args.segment
+    report['preview'] = args.preview
     report['silence_boundaries'] = args.segment and not args.fixed_segments
     report['render'] = args.render
     report['cancel_recognition'] = args.cancel_recognition

@@ -721,6 +721,35 @@ local function suite()
     complete(good)
     check(state['user-data/ai-subtitles/status'].cached and not cache.read(pcm), 'selected stream result cached and intermediate PCM removed')
     hooks.on_unload()
+    boot(a, {model = 'preview-fallback', api_key = 'mock-only'})
+    state.duration, state['time-pos'], state.sid = 180, 25, '7'
+    handlers['sub-fastwhisper']()
+    check(arg(jobs[1], '-ss') == '24' and arg(jobs[1], '-t') == '15', 'preview extracts audio near the playhead')
+    extracted()
+    local preview_job = jobs[2]
+    local preview_raw = preview_job.spec.args[2]:gsub('%.wav$', '.srt')
+    local function is_original_input(value) return value:gsub('\\', '/') == a:gsub('\\', '/') end
+    check(is_original_input(preview_job.spec.args[3]), 'one Whisper process receives preview and original media in that order')
+    check(cache.write(preview_raw, good) and cache.write(preview_raw:gsub('%.srt$', '.json'), '{"language":"en"}'),
+        'preview fixture is ready')
+    advance()
+    local preview_track = state['track-list'][1]
+    local preview_srt = preview_track['external-filename']:gsub('%.ai%.ass$', '.srt')
+    check(cache.read(preview_srt):find('00:00:24,000', 1, true) and not state['user-data/ai-subtitles/status'].cached,
+        'preview uses source timeline without committing a completed transcript')
+    state.sid = tostring(preview_track.id)
+    state.sub = {external = true, ['external-filename'] = preview_track['external-filename']}
+    handlers['sub-translate']()
+    check(#jobs == 2, 'preview cannot be used as a finished translation source')
+    preview_job.callback(true, {status = 0}) -- Backend accepted the command but wrote no whole-file output.
+    check(#jobs == 3 and is_original_input(jobs[3].spec.args[2]) and jobs[3].spec.args[3] == '--beep_off',
+        'missing full output retries the unchanged single-file command once')
+    check(#state['track-list'] == 0 and state.sid == '7' and not cache.read(preview_srt),
+        'retry removes the preview and restores the prior subtitle selection')
+    state.sub = nil
+    complete(good)
+    check(state['user-data/ai-subtitles/status'].cached, 'single-file retry completes normally')
+    hooks.on_unload()
     boot(b, {model='review-selection-preserved'})
     state.sid = '1'
     handlers['sub-fastwhisper']()

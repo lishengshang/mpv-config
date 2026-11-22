@@ -1,7 +1,9 @@
 -- Real mpv routing, subtitle loading, next-file, reset and persistent reuse.
 local utils = require 'mp.utils'
-local o = {root = '', first = '', second = '', timeout = 180, menu_switch = false, preset='qwen-quality', management = false, segment = false, render = false, cancel_recognition=false}
+local o = {root = '', first = '', second = '', timeout = 180, menu_switch = false, preset='qwen-quality',
+    management = false, segment = false, preview = false, render = false, cancel_recognition = false}
 require('mp.options').read_options(o, 'asr-playback')
+local progressive = o.segment or o.preview
 package.path = mp.command_native({'expand-path', '~~/script-modules/?.lua'}) .. ';' .. package.path
 local cache = require 'ai-subtitle-cache'
 local phase, previous, first_result, second_result = 0, nil, nil, nil
@@ -88,7 +90,7 @@ mp.register_event('file-loaded', function()
         check(mp.get_property_number('duration', 0) > 0, 'media duration available')
         check(mp.get_property_native('current-tracks/audio') ~= nil, 'audio track loaded')
         if phase == 0 then
-            if o.segment then
+            if progressive then
                 generate(100)
             elseif o.menu_switch then
                 phase = 90
@@ -123,18 +125,26 @@ mp.add_periodic_timer(0.15, function()
         check(mp.get_time() - started < o.timeout, 'playback test timeout')
         local result = cached_track()
         local running = mp.get_property_native('user-data/ai-subtitles/status/running')
-        if o.segment and (phase == 1 or phase == 2) and result and running then
+        local partial = result and result:match('[/\\]work%-')
+        if progressive and (phase == 1 or phase == 2) and partial and running then
             local key = phase == 1 and 'first' or 'second'
-            if phase == 1 and o.render and not metrics.first_partial_seconds then
-                capture_subtitles(result, 'partial')
+            if metrics[key .. '_partial_seconds'] then return end
+            metrics[key .. '_partial_seconds'] = mp.get_time() - job_started
+            local data = cache.read(result)
+            check(cache.valid_srt(data), 'partial output is valid SRT')
+            if o.preview then
+                local h, m, s = data:match('(%d%d):(%d%d):(%d%d),%d%d%d%s+%-%->')
+                local start = h * 3600 + m * 60 + s
+                check(start >= 19 and start < 34, 'preview uses the original playback timeline')
+                check(not mp.get_property_native('user-data/ai-subtitles/status/cached'), 'preview has no completed cache')
             end
-            metrics[key .. '_partial_seconds'] = metrics[key .. '_partial_seconds'] or (mp.get_time() - job_started)
-            check(cache.valid_srt(cache.read(result)), 'partial output is valid SRT')
+            if phase == 1 and o.render then capture_subtitles(result, 'partial') end
             return
         end
         if phase == 100 then
             check(mp.get_time() - job_started < 15, 'segment task publishes running state promptly')
-            if running and mp.get_time() - job_started > 0.5 then
+            if running and (o.preview and result or not o.preview and mp.get_time() - job_started > 0.5) then
+                partial_path = result
                 cancel_sent, phase = mp.get_time(), 101
                 mp.commandv('script-message-to', 'sub_fastwhisper', 'sub-fastwhisper-cancel')
             end
@@ -142,6 +152,7 @@ mp.add_periodic_timer(0.15, function()
             check(mp.get_time() - cancel_sent < 3, 'cancel responds without waiting for recognition')
             if not running then
                 check(not cached_track(), 'cancel leaves no partial track')
+                if partial_path then check(not cache.read(partial_path), 'cancel removes preview files') end
                 metrics.cancel_seconds = mp.get_time() - cancel_sent
                 generate(102)
             end
@@ -182,10 +193,10 @@ mp.add_periodic_timer(0.15, function()
         elseif phase == 83 and mp.get_property_native('user-data/ai-subtitles/status/running') and mp.get_time()-job_started > 1 then
             phase = 84
             mp.commandv('loadfile', o.second, 'replace')
-        elseif phase == 1 and result then
+        elseif phase == 1 and result and not partial then
             metrics.first_total_seconds = mp.get_time() - job_started
             metrics.media_duration = mp.get_property_number('duration')
-            if o.segment then check(metrics.first_partial_seconds, 'first output arrives before completion') end
+            if progressive then check(metrics.first_partial_seconds, 'first output arrives before completion') end
             verify(result)
             capture_subtitles(result, 'completed')
             clean_media_folder(o.first)
@@ -195,9 +206,9 @@ mp.add_periodic_timer(0.15, function()
         elseif phase == 11 and reset_done() and not screenshot_pending then
             phase = 12
             mp.commandv('loadfile', o.second, 'replace')
-        elseif phase == 2 and result then
+        elseif phase == 2 and result and not partial then
             metrics.second_total_seconds = mp.get_time() - job_started
-            if o.segment then check(metrics.second_partial_seconds, 'second output arrives before completion') end
+            if progressive then check(metrics.second_partial_seconds, 'second output arrives before completion') end
             check(result ~= first_result, 'same basename uses distinct cache')
             verify(result)
             clean_media_folder(o.second)
