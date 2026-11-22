@@ -15,6 +15,7 @@ require("modules/utils")
 require("modules/parse")
 require("modules/guess")
 require('modules/render')
+require('modules/blacklist')
 require('modules/menu')
 require("modules/update")
 
@@ -489,14 +490,17 @@ function read_danmaku_source_record(path)
                 }
             end
 
+            local existing = DANMAKU.sources[source]
             DANMAKU.sources[source] = {
                 from = from or "user_custom",
                 blocked = blocked,
                 delay_segments = delay_segments,
                 from_history = true,
+                data = existing and existing.data,
             }
 
             upgraded_sources[source] = shallow_copy(DANMAKU.sources[source])
+            upgraded_sources[source].data = nil
         end
 
         if next(upgraded_sources) then
@@ -687,11 +691,15 @@ mp.register_event("file-loaded", function()
     local video = mp.get_property_native("current-tracks/video")
     local fps = mp.get_property_number("container-fps", 0)
     local duration = mp.get_property_number("duration", 0)
-    if not video or video["image"] or video["albumart"] or fps < 23 or duration < 60 then
+
+    if not path then return end
+    read_danmaku_source_record(path)
+
+    -- 网络流在 file-loaded 时可能还没有帧率；本地短片和低帧率视频仍跳过自动加载。
+    if not video or video["image"] or video["albumart"] or duration < 60 or
+        (not is_protocol(path) and fps < 23) then
         return
     end
-
-    read_danmaku_source_record(path)
 
     if not get_danmaku_visibility() then
         return
@@ -774,8 +782,8 @@ mp.register_script_message("show_danmaku_keyboard", function()
 end)
 
 mp.register_script_message("auto_load_fallback", function()
-    if not fallback_triggered and options.auto_fallback_search and COMMENTS == nil then
-        fallback_triggered = true
+    if not FALLBACK_TRIGGER and options.auto_fallback_search and COMMENTS == nil then
+        FALLBACK_TRIGGER = true
         msg.info("自动加载弹幕失败，自动弹出搜索框")
         mp.commandv("script-message", "open_search_danmaku_menu")
     end
