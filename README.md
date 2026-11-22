@@ -4,32 +4,29 @@
 
 本项目是由 [lishengshang](https://github.com/lishengshang) 独立维护的 Windows [mpv](https://github.com/mpv-player/mpv) 配置与脚本集，基于 [dyphire/mpv-config](https://github.com/dyphire/mpv-config) 持续修改，保留第三方脚本、着色器的来源与许可。
 
-当前配置使用 `gpu-next` / D3D11，GPU 增强面向 NVIDIA RTX，按需开启。主要入口包括 uosc 菜单、GPU 增强、AI 字幕，以及配置检查、更新预览和播放诊断；具体依赖与验证边界见下方说明。
+项目以 Windows 本地播放为基础。Base 发行配置默认提供 uosc、进度条预览和常用播放操作；需要生成字幕或增强画质时，再安装 Whisper 或 NVIDIA RTX 扩展。
 
 **配置下载**：[本仓库](https://github.com/lishengshang/mpv-config)。仓库提供配置、脚本和着色器，不包含 mpv 播放器、外部运行时及 AI 模型。
 
 ### 第一次使用
 
-1. 备份已有播放器配置，准备支持 `gpu-next` / D3D11 的 Windows 64 位 mpv，保留播放器包内的 DLL 等文件。下载本仓库源码时，还需另备播放器；若使用本项目播放器发行包，按其 Release 说明解压，包内已有配置时跳过重复安装。
-2. 将本仓库内容放入 `mpv.exe` 同级的 `portable_config/`，确认文件是 `portable_config/mpv.conf`，不要多套一层目录。也可放入 `%APPDATA%/mpv/`；存在便携配置时优先使用便携配置。VS 安装与迁移工具按便携目录布局设计，准备使用这些功能时采用前一种布局。
-3. 启动 `mpv.exe`，拖入本地视频，右键打开菜单。先确认播放、声音和已有字幕正常，再按下面的用途添加可选功能。基础播放不要求安装 Python、VS 或 AI 模型。
+1. 从 [GitHub Releases](https://github.com/lishengshang/mpv-config/releases) 下载 `player-…-windows-x64.zip` 并解压到独立目录。
+2. Base 包双击 `MPV/start-mpv.cmd`，拖入视频或按 `o` 打开文件。右键打开菜单，按 `Alt+f` 打开 Whisper 入口。旧发行包使用 `MPV/mpv.exe`。
+3. 想添加功能时，进入右键菜单的「扩展」或双击 `MPV/first-setup.cmd`。换电脑时也可由后者检测并迁移旧版。详见 [组件安装与迁移](docs/config-checks.md#组件安装与迁移)。
 
-需要填写本机路径或私人 API key 时，参照 [local.conf.example](local.conf.example) 创建自己的 `local.conf`，该文件已从 Git 排除。更新配置前备份本地修改、`local.conf` 及需要保留的字幕缓存，不用别人的私人配置覆盖自己的设置。
+从源码部署进阶配置时，将仓库内容放入支持 `gpu-next` / D3D11 的 Windows x64 mpv 同级 `portable_config/`，直接运行 `mpv.exe`。本机路径、个人选项和密钥写入 `local.conf`，示例见 [local.conf.example](local.conf.example)。
 
 ### 按需求选择
 
 | 你的需求或环境 | 怎么用 | 继续阅读 |
 | --- | --- | --- |
-| 只想看视频、使用已有字幕 | 完成上面的三步，通过右键菜单选择音轨、字幕和播放设置；不必运行测试或安装 AI/VS | [菜单与快捷键](input.conf) |
-| 核显、AMD 或暂不安装增强组件 | 从基础播放开始；随配置提供的 shader 可按需尝试，RTX VS 方案不作为通用硬件方案 | [GPU 依赖与兼容范围](docs/gpu-setup.md) |
-| NVIDIA RTX，想超分、补帧或降噪 | 从菜单“画质增强 → 画面增强”按需选择；需要 VS 的方案先安装匹配运行时、插件与模型，再做 GPU 自检 | [GPU 快速上手](docs/gpu-setup.md) |
-| 视频没有字幕，想本地生成 | 先部署 Whisper 后端和模型，再按 `Alt+f`；Qwen 是另需部署的可选后端。翻译额外需要自己的接口和 key | [AI 字幕](docs/ai-subtitles.md) |
-| 换电脑、移动播放器或补装组件 | 使用便携目录布局和可信组件清单，通过 `tools/components.cmd` 检查、安装或修复路径 | [组件安装与迁移](docs/config-checks.md#组件安装与迁移) |
+| 看视频、切换音轨或加载已有字幕 | 从右键菜单进入对应选项 | [Base 快捷键](release/base/input.conf) |
+| NVIDIA RTX，想超分、补帧或降噪 | 安装 RTX 扩展，重开后从扩展菜单进入画质增强 | [GPU 快速上手](docs/gpu-setup.md) |
+| 视频没有字幕，想本地生成 | 安装 Whisper 后按 `Alt+f`。首次可选 CPU 或 NVIDIA CUDA | [AI 字幕](docs/ai-subtitles.md) |
+| 换电脑、移动播放器或补装组件 | Base 用 `first-setup.cmd` 检测旧版和选择扩展 | [组件安装与迁移](docs/config-checks.md#组件安装与迁移) |
 | 想调参、维护或参与开发 | 修改对应配置后运行 `tools/check-config.cmd`；测试在 `tools/tests/`，构建与发布在 `tools/release/` | [工具目录](docs/config-checks.md#工具目录)、[开发约束](AGENTS.md) |
 
 `tools/` 顶层保留 Windows 操作入口，普通用户按需使用即可；子目录包含播放器会调用的辅助程序，请随配置一起保留。配置检查需要 Python 3.10+，优先使用 mpv 同级的便携 Python；检查通过不代表 GPU 或字幕已在你的电脑上验收。
-
-从 [GitHub Releases](https://github.com/lishengshang/mpv-config/releases) 下载 `player-…-windows-x64.zip` 并解压。普通播放打开 `MPV/mpv.exe`。带 `MPV/first-setup.cmd` 的发行包可双击该入口联网安装字幕后端或 RTX 增强，按需选择。具体硬件条件、下载来源与迁移用法见 [组件安装与迁移](docs/config-checks.md#组件安装与迁移)。
 
 PS：自行编辑文本时使用 UTF-8、LF；脚本选项的注释单独占行，避免改变参数值。
 

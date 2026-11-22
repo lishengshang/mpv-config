@@ -31,6 +31,8 @@
 
 ## 安装可选 VS
 
+Base 可从「扩展 → RTX 画质增强」或 `first-setup.cmd` 安装。此后用 `start-mpv.cmd` 启动，再从扩展菜单进入画质增强。若用 Windows 文件关联直接调用 `mpv.exe`，本次进程可能拿不到 VS 所需的 `VSSCRIPT_PATH`。标准媒体播放可直接拖到播放器窗口。
+
 已有可信离线组件清单时，可双击 `tools/components.cmd` 检查、安装 VS 或修复搬家路径，详见[组件安装与迁移](config-checks.md#组件安装与迁移)。不同内容的已有 DLL 会阻止安装，避免覆盖播放器自带依赖；需选择与播放器兼容的组件包。
 
 仅复制配置不能获得 VS。优先复用匹配的整套便携运行时；上游入口：[mpv_PlayKit Releases](https://github.com/hooke007/mpv_PlayKit/releases) 的 NVIDIA `vsNV` 组件、[便携 Python/VS](https://github.com/hooke007/dotfiles/releases/tag/mpv_addones)、[部署说明](https://github.com/hooke007/mpv_PlayKit/wiki/3_K7sfunc)。发行资产以该页为准。

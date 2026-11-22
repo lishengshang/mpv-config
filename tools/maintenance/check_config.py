@@ -105,6 +105,7 @@ class Checker:
         self.profiles = {'default'}
         self.references = []
         self.bindings = []
+        self.explicit_scripts = set()
         self.native_version = None
         self.wiring = []
         self.wiring_confirmed = 0
@@ -176,6 +177,12 @@ class Checker:
             if key in ('profile', 'profile-append'):
                 for name in unquote(value).split(','):
                     self.references.append((label, number, name.strip()))
+            if key == 'scripts-append':
+                script = self.local_path(value, label, number)
+                if script and not script.exists():
+                    self.add('error', 'missing-script-file', label, number, 'Explicit script does not exist')
+                elif script:
+                    self.explicit_scripts.add(script)
             for asset in ASSET.findall(text):
                 self.asset(asset, label, number)
 
@@ -249,33 +256,35 @@ class Checker:
     def scripts(self):
         inventory = {}
         folder = self.root / 'scripts'
+        entries = self.explicit_scripts.copy()
         if folder.is_dir():
-            for entry in sorted(folder.iterdir()):
-                if entry.is_file() and entry.suffix in ('.lua', '.js'):
-                    name, files = entry.stem, [entry]
-                elif entry.is_dir() and any((entry / ('main' + ext)).is_file() for ext in ('.lua', '.js')):
-                    name = entry.name
-                    files = sorted(entry.rglob('*.lua')) + sorted(entry.rglob('*.js'))
-                else:
+            entries.update(folder.iterdir())
+        for entry in sorted(entries):
+            if entry.is_file() and entry.suffix in ('.lua', '.js'):
+                name, files = entry.stem, [entry]
+            elif entry.is_dir() and any((entry / ('main' + ext)).is_file() for ext in ('.lua', '.js')):
+                name = entry.name
+                files = sorted(entry.rglob('*.lua')) + sorted(entry.rglob('*.js'))
+            else:
+                continue
+            identifier = re.sub(r'[^A-Za-z0-9_]', '_', name)
+            if identifier in inventory:
+                self.add('error', 'script-name-collision', entry.relative_to(self.root).as_posix(), 1,
+                         'Ambiguous normalized script identifier: ' + identifier)
+            messages, bindings = set(), set()
+            for file in files:
+                if not file.resolve().is_relative_to(self.root) or file.resolve() == self.root / 'local.conf':
+                    self.add('warning', 'external-script', file.relative_to(self.root).as_posix(), 1,
+                             'Linked/private script source excluded from inspection')
                     continue
-                identifier = re.sub(r'[^A-Za-z0-9_]', '_', name)
-                if identifier in inventory:
-                    self.add('error', 'script-name-collision', entry.relative_to(self.root).as_posix(), 1,
-                             'Ambiguous normalized script identifier: ' + identifier)
-                messages, bindings = set(), set()
-                for file in files:
-                    if not file.resolve().is_relative_to(self.root) or file.resolve() == self.root / 'local.conf':
-                        self.add('warning', 'external-script', file.relative_to(self.root).as_posix(), 1,
-                                 'Linked/private script source excluded from inspection')
-                        continue
-                    # Source evidence only; conditionals, modules and aliases are not executed.
-                    text = '\n'.join(line for line in self.read(file) if not line.lstrip().startswith('--'))
-                    for _, value in re.findall(r'\bregister_script_message\s*\(\s*([\"\x27])([^\"\x27]+)\1', text):
-                        messages.add(value)
-                    for _, value in re.findall(r'\badd_(?:forced_)?key_binding\s*\([^,\n]+,\s*([\"\x27])([^\"\x27]+)\1', text):
-                        bindings.add(value)
-                # mp.defaults exposes named key bindings as script-message handlers too.
-                inventory[identifier] = (messages | bindings, bindings)
+                # Source evidence only; conditionals, modules and aliases are not executed.
+                text = '\n'.join(line for line in self.read(file) if not line.lstrip().startswith('--'))
+                for _, value in re.findall(r'\bregister_script_message\s*\(\s*([\"\x27])([^\"\x27]+)\1', text):
+                    messages.add(value)
+                for _, value in re.findall(r'\badd_(?:forced_)?key_binding\s*\([^,\n]+,\s*([\"\x27])([^\"\x27]+)\1', text):
+                    bindings.add(value)
+            # mp.defaults exposes named key bindings as script-message handlers too.
+            inventory[identifier] = (messages | bindings, bindings)
         deferred = set()
         for file, line, part in self.wiring:
             kind = part[0]

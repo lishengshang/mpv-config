@@ -26,6 +26,7 @@ CONFIG_FILES = {'mpv.conf', 'profiles.conf', 'input.conf', 'inputevent_key.conf'
 CONFIG_DIRS = {'fonts', 'icc', 'osc-style', 'script-modules', 'script-opts',
                'scripts', 'shaders', 'vs', 'tools', 'docs', 'release'}
 PRIVATE_DIRS = {'.git', 'cache', 'files', 'state', 'playlists', '__pycache__', '.venv'}
+BASE_DATA_DIRS = ('state/watch_later', 'files/screenshots', 'files/subtitles')
 
 
 def dump(path, value):
@@ -236,6 +237,40 @@ def snapshot_config(source, commit, destination):
         'ytdl-raw-options-remove=cookies-from-browser\n', encoding='utf-8')
 
 
+def base_features(config):
+    items = json.loads((config / 'release/base/extensions.json').read_text(encoding='utf-8'))
+    ids = [item['id'] for item in items]
+    if len(set(ids)) != len(ids) or not all(re.fullmatch(r'[a-z][a-z0-9-]+', name) for name in ids):
+        raise ValueError('Invalid Base extension ids')
+    for item in items:
+        if not safe_member(item['script']) or not (config / item['script']).exists():
+            raise ValueError('Missing or invalid extension script: ' + item['id'])
+    return ids
+
+
+def assemble_base(player):
+    config = player / 'portable_config'
+    base = config / 'release/base'
+    if not (base / 'mpv.conf').is_file():
+        return
+    for source, target in [('mpv.conf', config / 'mpv.conf'), ('input.conf', config / 'input.conf'),
+                           ('uosc.conf', config / 'script-opts/uosc.conf'), ('start-mpv.cmd', player / 'start-mpv.cmd')]:
+        shutil.copyfile(base / source, target)
+    names = base_features(config)
+    for directory in BASE_DATA_DIRS:
+        (config / directory).mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (config / 'state' / (name + '.conf')).write_text('# Disabled\n', encoding='utf-8', newline='\n')
+    main = config / 'mpv.conf'
+    text = main.read_text(encoding='utf-8')
+    user_include = 'include=~~/local.conf\n'
+    if not text.endswith(user_include):
+        raise ValueError('Base user overrides must load last')
+    managed = ''.join(f'include=~~/state/{name}.conf\n' for name in names)
+    main.write_text(text.removesuffix(user_include) + managed + user_include, encoding='utf-8', newline='\n')
+    (config / 'local.conf').write_text('# User overrides. This file is private.\n', encoding='utf-8', newline='\n')
+
+
 def validate_capabilities(runtime, settings, env=None):
     mpv = runtime / 'mpv.com'
     if not mpv.is_file() or not (runtime / 'mpv.exe').is_file():
@@ -281,6 +316,7 @@ def package_release(args):
     if config.exists():
         raise ValueError('Runtime must not contain bundled personal configuration')
     snapshot_config(source, plan['config_commit'], config)
+    assemble_base(player)
     setup_launcher = config / 'tools/first-setup.cmd'
     if setup_launcher.is_file():
         shutil.copyfile(setup_launcher, player / setup_launcher.name)
@@ -366,19 +402,12 @@ mp.add_timeout(15, function() mp.commandv('quit', '5') end)
     print('PASS (CPU/scripts only): ' + str(evidence / 'report.json'))
 
 
-def archive_release(args):
-    player = Path(args.player).resolve()
-    plan = load_plan(player / 'release-info.json')
-    report = json.loads(Path(args.report).read_text(encoding='utf-8'))
-    if report['passed'] is not True or any(report[key] != plan[key] for key in ('config_commit', 'mpv_commit')):
-        raise ValueError('Missing or mismatched successful runtime check')
-    if report['files_sha256'] != fingerprint(player):
-        raise ValueError('Player changed after verification; run the check again')
+def write_player_zip(player, target):
+    is_base = (player / 'start-mpv.cmd').is_file()
+    if is_base and any((player / name).exists() for name in ('components', 'VSScript.dll')):
+        raise ValueError('Base release staging must be free of optional runtimes')
     # Capture the input file list before creating the ZIP, which may be inside player.
     files = list(distributable_files(player))
-    output = Path(args.output).resolve()
-    output.mkdir(parents=True, exist_ok=False)
-    target = output / (plan['tag'] + '-windows-x64.zip')
     with zipfile.ZipFile(target, 'x', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         for path, relative in files:
             if relative == 'portable_config/local.conf':
@@ -387,25 +416,52 @@ def archive_release(args):
         # Empty directories and generated defaults must exist even on first run.
         for name in ('files', 'cache', 'state', 'playlists'):
             archive.writestr('MPV/portable_config/' + name + '/', b'')
-        archive.writestr('MPV/portable_config/local.conf',
-                         (player / 'portable_config/local.conf').read_bytes())
+        local = ((player / 'portable_config/local.conf').read_bytes() if not is_base
+                 else b'# User overrides. This file is private.\n')
+        archive.writestr('MPV/portable_config/local.conf', local)
+        if is_base:
+            for directory in BASE_DATA_DIRS:
+                archive.writestr(f'MPV/portable_config/{directory}/', b'')
+            for name in base_features(player / 'portable_config'):
+                archive.writestr('MPV/portable_config/state/' + name + '.conf', b'# Disabled\n')
     if target.stat().st_size >= 2 * 1024**3:
         raise ValueError('Release asset must be smaller than 2 GiB')
-    (output / 'SHA256SUMS').write_text(hash_file(target) + '  ' + target.name + '\n', encoding='utf-8')
-    dump(output / 'release-plan.json', plan)
-    dump(output / 'smoke-report.json', report)
+
+
+def archive_release(args):
+    player = Path(args.player).resolve()
+    plan = load_plan(player / 'release-info.json')
+    report = json.loads(Path(args.report).read_text(encoding='utf-8'))
+    if report['passed'] is not True or any(report[key] != plan[key] for key in ('config_commit', 'mpv_commit')):
+        raise ValueError('Missing or mismatched successful runtime check')
+    if report['files_sha256'] != fingerprint(player):
+        raise ValueError('Player changed after verification; run the check again')
+    is_base = (player / 'start-mpv.cmd').is_file()
     menu_path = getattr(args, 'menu_report', None)
     if menu_path:
         menu_report = json.loads(Path(menu_path).read_text(encoding='utf-8'))
-        if menu_report.get('ok') is not True or menu_report.get('player_sha256') != hash_file(player / 'mpv.exe'):
-            raise ValueError('Menu check failed or belongs to a different player')
+        if (menu_report.get('ok') is not True or menu_report.get('player_sha256') != hash_file(player / 'mpv.exe')
+                or (is_base and menu_report.get('layout') != 'base')):
+            raise ValueError('Menu check failed or belongs to a different player layout')
+    output = Path(args.output).resolve()
+    output.mkdir(parents=True, exist_ok=False)
+    target = output / (plan['tag'] + '-windows-x64.zip')
+    write_player_zip(player, target)
+    (output / 'SHA256SUMS').write_text(hash_file(target) + '  ' + target.name + '\n', encoding='utf-8')
+    dump(output / 'release-plan.json', plan)
+    dump(output / 'smoke-report.json', report)
+    if menu_path:
         dump(output / 'menu-report.json', menu_report)
     notes = (f'Based on [{plan["mpv_tag"]}]({plan["upstream_url"]}), source `{plan["mpv_commit"]}`.\n\n'
              f'Configuration commit: `{plan["config_commit"]}`. Windows x64, project build with VapourSynth.\n\n'
              'Automated checks cover CPU playback, script startup, next-file/reset and native command parsing. '
              'GPU rendering, VS output, AI inference and fresh-machine portability require acceptance before stable promotion.\n\n'
              'Optional components are versioned separately. This candidate does not claim a complete offline AI/VS installation.\n')
-    if (player / 'first-setup.cmd').is_file():
+    if is_base:
+        notes += ('\nExtract the Windows x64 ZIP and run MPV/start-mpv.cmd. '
+                  'Whisper and RTX VapourSynth can be installed from the in-player Extensions menu '
+                  'or MPV/first-setup.cmd. Extensions are disabled by default.\n')
+    elif (player / 'first-setup.cmd').is_file():
         notes += ('\nExtract the Windows x64 ZIP and open MPV/mpv.exe. '
                   'Double-click MPV/first-setup.cmd to download optional components from upstream. '
                   'Whisper runs on CPU or NVIDIA CUDA. VapourSynth, Qwen and SenseVoice require '
@@ -418,7 +474,7 @@ def archive_release(args):
             f'- [{path}](https://github.com/{plan["repository"]}/blob/{plan["config_commit"]}/{path})\n'
             for path in selected_local_patches(plan))
     if menu_path:
-        notes += '\nFull menu, subtitle controls, next-file and reset checks passed with software D3D11 (WARP). See menu-report.json.\n'
+        notes += '\nRelease menu and playback checks passed with software D3D11 (WARP). See menu-report.json.\n'
     (output / 'release-notes.md').write_text(notes, encoding='utf-8')
     print('Created: ' + str(target))
 
@@ -466,10 +522,12 @@ def publish_release(args):
         raise ValueError('Draft belongs to a different configuration commit; increase revision')
     menu_report = json.loads((directory / 'menu-report.json').read_text(encoding='utf-8'))
     with zipfile.ZipFile(directory / expected_archive) as zipped:
+        is_base = 'MPV/start-mpv.cmd' in zipped.namelist()
         with zipped.open('MPV/mpv.exe') as binary:
             binary_hash = _hash_stream(binary)
-    if menu_report.get('ok') is not True or menu_report.get('player_sha256') != binary_hash:
-        raise ValueError('Final player has not passed the full menu check')
+    if (menu_report.get('ok') is not True or menu_report.get('player_sha256') != binary_hash
+            or (is_base and menu_report.get('layout') != 'base')):
+        raise ValueError('Final player has not passed the release menu check')
     if not existing:
         run(['gh', 'release', 'create', plan['tag'], '--repo', repo, '--target', plan['config_commit'],
              '--draft', '--prerelease', '--latest=false', '--title', plan['tag'],

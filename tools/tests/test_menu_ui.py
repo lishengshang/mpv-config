@@ -15,7 +15,9 @@ ROOT = Path(__file__).resolve().parents[2]
 def main():
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--full', action='store_true', help='Load the real config and all daily scripts; isolate history and network danmaku')
+    layout = parser.add_mutually_exclusive_group()
+    layout.add_argument('--base', action='store_true', help='Test the staged Base ZIP configuration')
+    layout.add_argument('--full', action='store_true', help='Load the real config and all daily scripts; isolate history and network danmaku')
     parser.add_argument('--software-renderer', action='store_true', help='Use D3D11 WARP without enhancement shaders for CI menu checks')
     parser.add_argument('--local-media', action='store_true', help='Generate a local H.264/AAC fixture with the bundled FFmpeg')
     parser.add_argument('--input-conf', type=Path, default=ROOT / 'input.conf', help='Validate an alternate input configuration, such as the staged snapshot')
@@ -40,21 +42,25 @@ def main():
         source = str(media)
     scripts = ['scripts/uosc', 'scripts/menu-ui.lua', 'scripts/panel-manager.lua', 'scripts/dyn_menu.lua', 'scripts/inputevent.lua',
                'scripts/gpu-effects.lua', 'scripts/quality-menu.lua', 'tools/tests/test_menu_ui_playback.lua']
-    if options.full:
+    if options.base:
+        scripts = ['tools/tests/test_base_playback.lua']
+    elif options.full:
         scripts = ['tools/tests/test_menu_ui_playback.lua']
     opts = [f'menu-test-output={folder.as_posix()}', f'simplehistory-log_path={folder.as_posix()}',
             f'simplebookmark-log_path={folder.as_posix()}', 'uosc_danmaku-auto_load=no',
             'uosc_danmaku-autoload_for_url=no', 'uosc_danmaku-autoload_local_danmaku=no']
-    args = [str(ROOT.parent / 'mpv.exe'), *([] if options.full else ['--no-config']),
-            f'--config-dir={ROOT}', '--load-scripts=' + ('yes' if options.full else 'no'),
+    args = [str(ROOT.parent / 'mpv.exe'), *([] if options.full or options.base else ['--no-config']),
+            f'--config-dir={ROOT}',
+            *([] if options.base else ['--load-scripts=' + ('yes' if options.full else 'no')]),
             *(f'--script={ROOT / path}' for path in scripts), f'--input-conf={options.input_conf.resolve()}',
             '--vo=gpu-next', '--gpu-api=d3d11', '--ao=null', '--hwdec=no', '--osc=no', '--idle=yes',
             '--input-cursor=no',  # Isolate keyboard navigation from physical mouse movement.
-            '--pause=yes', '--input-ipc-server=', '--resume-playback=no', '--save-position-on-quit=no', '--geometry=1280x720',
+            '--pause=yes', *([] if options.base else ['--input-ipc-server=']),
+            '--resume-playback=no', '--save-position-on-quit=no', '--geometry=1280x720',
             '--speed=1', '--mute=no', '--secondary-sub-scale=1', '--video-aspect-override=no', '--loop-file=no',
             '--term-status-msg=', f'--osd-fonts-dir={ROOT / "fonts"}', '--osd-font=Noto Sans Mono CJK SC',
             f'--screenshot-directory={folder}', '--screenshot-template=continuous-%n',
-            '--reset-on-next-file=vid,aid,sid,secondary-sid,speed,secondary-sub-scale',
+            *([] if options.base else ['--reset-on-next-file=vid,aid,sid,secondary-sid,speed,secondary-sub-scale']),
             *(f'--script-opts-append={opt}' for opt in opts), f'--log-file={folder / "player.log"}', source]
     if options.software_renderer:
         args[1:1] = ['--d3d11-warp=yes', '--glsl-shaders-clr']
@@ -73,6 +79,7 @@ def main():
     report['exit_code'], report['timed_out'] = code, timed_out
     report['renderer'] = 'd3d11-warp' if options.software_renderer else 'd3d11-auto'
     report['media'] = 'local-h264-aac' if options.local_media else 'lavfi-device'
+    report['layout'] = 'base' if options.base else ('full' if options.full else 'isolated')
     report['player_sha256'] = hashlib.sha256((ROOT.parent / 'mpv.exe').read_bytes()).hexdigest()
     report['fatal_errors'] = [line for line in log.splitlines() if re.match(r'^\[.*?\]\[f\]\[', line)]
     report['runtime_errors'] = [line for line in log.splitlines() if re.match(r'^\[.*?\]\[e\]\[', line)]

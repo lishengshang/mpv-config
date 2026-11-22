@@ -1,5 +1,7 @@
 # AI 字幕
 
+Base 用户可从「扩展 → AI 字幕 · Whisper」安装，重开播放器后按 `Alt+f`。字幕写入 `portable_config/files/subtitles/`，启用和后端路径由 `state/whisper.conf` 保存。以下统一环境、Qwen 和 SenseVoice 的说明适用于进阶配置。
+
 生成入口为 `Alt+f` 或菜单 **字幕 → 下载／生成 → AI 字幕…** 中的“生成字幕”；`Alt+F` 是另一功能。默认用 [faster-whisper-xxl](https://github.com/Purfview/whisper-standalone-win)、`large-v3-turbo`、CUDA、float16、普通推理（`whisper_mode=context`），语种自动检测并保留逐词时间轴。批量提速为可选速度档；当前后端版本的长片实测存在无效时间轴，故不默认开启。方案由用户选择，不按文件名猜测语种，不在失败时静默换模型。路径放在忽略的 `local.conf`，共享默认参数在 `script-opts/sub_fastwhisper.conf`。
 
 ## 选择识别方案
@@ -40,7 +42,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/setup-ai-subtitles.ps1
 ## 使用与缓存
 
 - `j` / `k` 选择主/次字幕，`v` / `Alt+V` 控制显示；`Ctrl+r` 重载字幕，`Shift+Backspace` 恢复字幕位置/缩放/时延，不删除缓存。
-- 配置文件为 `script-opts/sub_fastwhisper.conf`，脚本标识 `sub_fastwhisper`。未安装统一环境时输出到 `~~/cache/ai-subtitles/`；安装注册后由 `local.conf` 指向统一根目录的 `subtitles/`。不在媒体同级写入；旧 `output_path=source` 回退到仓库缓存。
+- 配置文件为 `script-opts/sub_fastwhisper.conf`，脚本标识 `sub_fastwhisper`。进阶配置未安装统一环境时输出到 `~~/cache/ai-subtitles/`，安装注册后由 `local.conf` 指向统一根目录的 `subtitles/`。旧 `output_path=source` 回退到仓库缓存。
 - AI 字幕默认缩为原来的 80%（`font_scale=0.8`）：原文按当前纯文本字号换算，双语 ASS 的 70/50 改为 56/40，不修改普通字幕的全局字号/缩放。播放使用缓存中的独立 ASS，识别与翻译原始 SRT、导出内容保留。
 - 长句按 UTF-8 字符宽度和标点分屏，双语每种语言一行、总计最多两行；`layout_line_width=56` 按半角计宽，中文约占两格，`layout_max_seconds=6` 控制长段显示时长。拆分时间按文本长度近似分配，不等于逐词对齐；数学公式和快速讲话仍需人工抽查。改排版参数后重新加载即可，无需重新识别或请求翻译。
 - 菜单 **字幕 → 下载／生成 → AI 字幕… → 更多设置… → 识别方案…** 选择上述六个方案；勾选项为当前方案，`Alt+f` 生成所选方案的字幕。任务进行时先取消再切换；切换移除缓存字幕轨并尝试读取新方案的缓存，保留其他字幕轨，不立即开始识别。

@@ -93,12 +93,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./cache/release-build/runtime/mpv.com --no-config --load-scripts=no --script=tools/tests/test_gpu_effects.lua --idle=yes --vo=null --ao=null --osc=no
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify isolated playback, all scripts, next file and reset
+      - name: Verify isolated playback, Base script startup, next file and reset
         shell: pwsh
         run: python tools/release/release.py check --player cache/release-stage/MPV --evidence cache/release-evidence
-      - name: Verify full menus and subtitle controls with software D3D11
+      - name: Verify the packaged menu and playback with software D3D11
         shell: pwsh
-        run: python cache/release-stage/MPV/portable_config/tools/tests/test_menu_ui.py --full --software-renderer --local-media > cache/release-menu-report.json
+        run: python cache/release-stage/MPV/portable_config/tools/tests/test_menu_ui.py --base --software-renderer --local-media > cache/release-menu-report.json
       - name: Archive verified candidate
         shell: pwsh
         run: python tools/release/release.py archive --player cache/release-stage/MPV --report cache/release-evidence/report.json --menu-report cache/release-menu-report.json --output cache/release-assets

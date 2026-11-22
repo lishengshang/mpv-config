@@ -40,6 +40,8 @@
       }
     ]
   },
+  "vapoursynth_version": "mpv-playkit-20260510-artcnn-1.6.2",
+  "vapoursynth_archive_sha256": "1b45bcf3e567e2c5219098b25827d662dd418388fcd35463c3a8661c63b07c82",
   "vapoursynth": [
     {
       "name": "mpv-lazy-20260510-vsNV.7z.001",

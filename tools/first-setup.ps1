@@ -1,15 +1,18 @@
 # Windows PowerShell 5.1 and later. Keep launcher and scripts in the release layout.
 [CmdletBinding()]
 param(
-    [ValidateSet('Menu','Whisper','VapourSynth','Qwen','SenseVoice')][string]$Action = 'Menu',
+    [ValidateSet('Menu','Whisper','VapourSynth','Qwen','SenseVoice','Enable','Disable','Rollback','Migrate')][string]$Action = 'Menu',
     [ValidateSet('cpu','cuda')][string]$Device = 'cpu',
     [ValidateSet('huggingface','modelscope')][string]$ModelSource = 'huggingface',
-    [string]$DownloadDirectory = ''
+    [string]$DownloadDirectory = '',
+    [ValidateSet('whisper','rtx')][string]$Feature = 'whisper',
+    [string]$From = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $config = Split-Path $PSScriptRoot -Parent
 $player = Split-Path $config -Parent
+$baseLayout = Test-Path -LiteralPath (Join-Path $player 'start-mpv.cmd') -PathType Leaf
 if (!(Test-Path -LiteralPath (Join-Path $player 'mpv.exe') -PathType Leaf)) {
     throw 'Put portable_config next to mpv.exe before running setup.'
 }
@@ -17,16 +20,25 @@ if ($Action -eq 'Menu') {
     Write-Host '1  Whisper subtitles (CPU, recommended for first setup)'
     Write-Host '2  Whisper subtitles (NVIDIA CUDA)'
     Write-Host '3  NVIDIA RTX (VapourSynth)'
-    Write-Host '4  Qwen AI subtitles (NVIDIA CUDA)'
-    Write-Host '5  SenseVoice AI subtitles (NVIDIA CUDA)'
+    if ($baseLayout) {
+        Write-Host '4  Change extension state'
+        Write-Host '5  Migrate from an older player'
+    } else {
+        Write-Host '4  Qwen AI subtitles (NVIDIA CUDA)'
+        Write-Host '5  SenseVoice AI subtitles (NVIDIA CUDA)'
+    }
     Write-Host '0  Exit'
     $choice = Read-Host 'Choose a component'
     switch ($choice) {
         '1' { $Device = 'cpu' }
         '2' { $Device = 'cuda' }
         '3' { $Action = 'VapourSynth' }
-        '4' { $Action = 'Qwen' }
-        '5' { $Action = 'SenseVoice' }
+        '4' {
+            if (!$baseLayout) { $Action = 'Qwen'; break }
+            $Feature = Read-Host 'Extension (whisper or rtx)'
+            $Action = Read-Host 'Action (Enable, Disable, Rollback)'
+        }
+        '5' { $Action = $(if ($baseLayout) { 'Migrate' } else { 'SenseVoice' }) }
         '0' { return }
         default { throw 'Invalid selection.' }
     }
@@ -44,6 +56,12 @@ function Assert-LocalPath([string]$Path) {
         $cursor = Split-Path $cursor -Parent
     }
 }
+
+if ($Action -notin @('Menu','Whisper','VapourSynth','Qwen','SenseVoice','Enable','Disable','Rollback','Migrate') -or
+    $Feature -notin @('whisper','rtx')) { throw 'Invalid setup selection.' }
+
+$baseStateScript = Join-Path $PSScriptRoot 'base-state.ps1'
+if ($baseLayout) { . $baseStateScript }
 
 function Get-Sha256([string]$Path) {
     $inputFile = [IO.File]::OpenRead($Path)
@@ -83,6 +101,10 @@ function Get-Asset($Asset, [string]$Destination) {
             throw "Missing offline file: $($Asset.name)"
         }
         Copy-Item -LiteralPath $original -Destination $partial -Force
+    } elseif ($From -and (Test-Asset (Join-Path $From ('portable_config/cache/first-setup/downloads/' + $Asset.name)) $Asset)) {
+        $original = Join-Path $From ('portable_config/cache/first-setup/downloads/' + $Asset.name)
+        Assert-LocalPath $original
+        Copy-Item -LiteralPath $original -Destination $partial -Force
     } else {
         Write-Host "Downloading $($Asset.name) ..."
         & "$env:SystemRoot\System32\curl.exe" --fail --location --retry 2 --continue-at - --connect-timeout 20 --speed-time 90 --speed-limit 4096 --proto '=https' --proto-redir '=https' --output $partial $Asset.url
@@ -107,21 +129,31 @@ function Remove-Stage([string]$Path) {
     Remove-Item -LiteralPath $resolved -Recurse -Force
 }
 
-function Install-VapourSynth($AssetList, $ChromaModels) {
+function Install-VapourSynth($Sources) {
     $modelsReady = $true
-    foreach ($asset in $ChromaModels) {
+    foreach ($asset in $Sources.artcnn_chroma) {
         $installed = Join-Path $player ('vs-plugins\models\ArtCNN\' + $asset.name)
         Assert-LocalPath $installed
         if (!(Test-Asset $installed $asset)) { $modelsReady = $false }
     }
-    if ($modelsReady -and (Test-Path -LiteralPath (Join-Path $config 'state\components\vs.json') -PathType Leaf)) {
+    $receiptPath = Join-Path $config 'state\components\vs.json'
+    Assert-LocalPath $receiptPath
+    if (Test-Path -LiteralPath $receiptPath -PathType Leaf) {
+        $receipt = Get-Content -LiteralPath $receiptPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($baseLayout -and ($receipt.version -ne $Sources.vapoursynth_version -or
+                $receipt.archive_sha256 -ne $Sources.vapoursynth_archive_sha256)) {
+            throw 'A different VS version is installed. Install the version from this package in a new Base folder.'
+        }
+    }
+    if ($modelsReady -and $receipt) {
         $python = Join-Path $player 'python.exe'
+        Assert-LocalPath $python
         & $python -B (Join-Path $PSScriptRoot 'maintenance/components.py') configure --mpv-root $player
         if ($LASTEXITCODE) { throw 'VapourSynth path repair failed.' }
-        Write-Host 'VapourSynth is already installed. Start it with mpv-components.cmd.'
+        Write-Host 'VapourSynth is already installed.'
         return
     }
-    foreach ($asset in $AssetList) {
+    foreach ($asset in $Sources.vapoursynth) {
         Get-Asset $asset (Join-Path $download $asset.name)
     }
     $stage = Join-Path $cache ('vs-' + [guid]::NewGuid().ToString('N'))
@@ -129,12 +161,15 @@ function Install-VapourSynth($AssetList, $ChromaModels) {
     $archive = Join-Path $stage 'upstream.7z'
     $sink = [IO.File]::Open($archive, [IO.FileMode]::CreateNew)
     try {
-        foreach ($asset in $AssetList) {
+        foreach ($asset in $Sources.vapoursynth) {
             $source = [IO.File]::OpenRead((Join-Path $download $asset.name))
             try { $source.CopyTo($sink) } finally { $source.Dispose() }
         }
     } finally { $sink.Dispose() }
     $archiveHash = (Get-Sha256 $archive)
+    if ($archiveHash -ne $Sources.vapoursynth_archive_sha256) {
+        throw 'VapourSynth combined archive checksum does not match the pinned source.'
+    }
     $payload = Join-Path $stage 'payload'
     [IO.Directory]::CreateDirectory($payload) | Out-Null
     Write-Host 'Extracting the upstream VapourSynth package ...'
@@ -149,7 +184,7 @@ function Install-VapourSynth($AssetList, $ChromaModels) {
     $artcnn = Join-Path $runtime 'vs-plugins\models\ArtCNN'
     Assert-LocalPath $artcnn
     [IO.Directory]::CreateDirectory($artcnn) | Out-Null
-    foreach ($asset in $ChromaModels) {
+    foreach ($asset in $Sources.artcnn_chroma) {
         $destination = Join-Path $artcnn $asset.name
         Assert-LocalPath $destination
         Get-Asset $asset (Join-Path $download $asset.name)
@@ -159,10 +194,10 @@ function Install-VapourSynth($AssetList, $ChromaModels) {
     }
     $python = Join-Path $runtime 'python.exe'
     Assert-LocalPath $python
-    & $python -B (Join-Path $PSScriptRoot 'maintenance/install_upstream_vs.py') $player $runtime $archiveHash
+    & $python -B (Join-Path $PSScriptRoot 'maintenance/install_upstream_vs.py') $player $runtime $archiveHash $Sources.vapoursynth_version
     if ($LASTEXITCODE) { throw 'VapourSynth installation or its native frame probe failed.' }
     Remove-Stage $stage
-    Write-Host 'VapourSynth installed. Start with mpv-components.cmd.'
+    Write-Host 'VapourSynth installed.'
 }
 
 
@@ -244,10 +279,15 @@ function Update-PrivateSettings([Collections.IDictionary]$Settings) {
         if ($text) { $text += [Environment]::NewLine }
         $text += "script-opts-append=$key=$($settings[$key])"
     }
-    $id = [guid]::NewGuid().ToString('N')
-    $pending = Join-Path $config "local.conf.$id.tmp"
-    $backup = Join-Path $cache "local.conf.$id.bak"
-    $payload = [Text.UTF8Encoding]::new($false).GetBytes(($text.Replace([Environment]::NewLine, [string][char]10) + [char]10))
+    $backup = Join-Path $cache ('local.conf.' + [guid]::NewGuid().ToString('N') + '.bak')
+    Save-SetupConfig $localPath $text $backup
+}
+
+function Save-SetupConfig([string]$Path, [string]$Text, [string]$Backup) {
+    Assert-LocalPath $Path
+    Assert-LocalPath $Backup
+    $pending = $Path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+    $payload = [Text.UTF8Encoding]::new($false).GetBytes(($Text.Replace([Environment]::NewLine, [string][char]10).TrimEnd([char]10) + [char]10))
     $stream = [IO.File]::Open($pending, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
     try {
         $stream.Write($payload, 0, $payload.Length)
@@ -255,10 +295,10 @@ function Update-PrivateSettings([Collections.IDictionary]$Settings) {
         $stream.Dispose()
     }
     try {
-        if (Test-Path -LiteralPath $localPath) {
-            [IO.File]::Replace($pending, $localPath, $backup)
+        if (Test-Path -LiteralPath $Path) {
+            [IO.File]::Replace($pending, $Path, $Backup)
         } else {
-            [IO.File]::Move($pending, $localPath)
+            [IO.File]::Move($pending, $Path)
         }
     } finally {
         if (Test-Path -LiteralPath $pending) {
@@ -270,6 +310,11 @@ function Update-PrivateSettings([Collections.IDictionary]$Settings) {
 $cache = Join-Path $config 'cache\first-setup'
 $download = Join-Path $cache 'downloads'
 $components = Join-Path $player 'components'
+if ($Action -eq 'Migrate') {
+    if (!$baseLayout) { throw 'This action requires a Base player package.' }
+    . (Join-Path $PSScriptRoot 'migrate-base.ps1')
+    return
+}
 foreach ($path in $cache,$download,$components) {
     Assert-LocalPath $path
     [IO.Directory]::CreateDirectory($path) | Out-Null
@@ -279,11 +324,24 @@ Assert-LocalPath $lockFile
 $lock = [IO.File]::Open($lockFile, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
 try {
     $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'first-setup-sources.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($Action -in @('Enable','Disable','Rollback')) {
+        if (!$baseLayout) { throw 'This action requires a Base player package.' }
+        Change-FeatureState $Feature $Action
+        Write-Host 'Saved. Reopen the player to apply changes.'
+        return
+    }
     if ($Action -eq 'VapourSynth') {
-        Install-VapourSynth $catalog.vapoursynth $catalog.artcnn_chroma
+        Install-VapourSynth $catalog
+        if ($baseLayout) {
+            Set-FeatureConfig 'rtx' ([ordered]@{'gpu-effects-runtime_path' = '~~/../'})
+            Write-Host 'Reopen with start-mpv.cmd.'
+        } else {
+            Write-Host 'Start with mpv-components.cmd.'
+        }
         return
     }
     if ($Action -in @('Qwen','SenseVoice')) {
+        if ($baseLayout) { throw 'Use an older full config for these backends until their Base integration is available.' }
         Install-ExtraAsr $Action $catalog.uv
         return
     }
@@ -333,14 +391,20 @@ try {
         [IO.Directory]::Move($runtime, $destination)
     }
     $prefix = "~~/../components/$($whisper.directory)"
-    Update-PrivateSettings ([ordered]@{
+    $settings = [ordered]@{
         'sub_fastwhisper-fast_whisper_path' = "$prefix/faster-whisper-xxl.exe"
         'sub_fastwhisper-ffmpeg_path' = "$prefix/ffmpeg.exe"
         'sub_fastwhisper-whisper_model_dir' = "$prefix/_models"
         'sub_fastwhisper-model' = 'large-v3-turbo'
         'sub_fastwhisper-device' = $Device
         'sub_fastwhisper-compute_type' = $(if ($Device -eq 'cuda') { 'float16' } else { 'int8' })
-    })
+    }
+    if ($baseLayout) {
+        $settings['sub_fastwhisper-output_path'] = '~~/files/subtitles'
+        Set-FeatureConfig 'whisper' $settings
+    } else {
+        Update-PrivateSettings $settings
+    }
     if ($newInstall) { Remove-Stage $stage }
     Write-Host 'Whisper installed. Open a video in mpv and press Alt+F.'
 } finally {

@@ -9,7 +9,7 @@ import component_store as store
 from components import runtime_files
 
 
-def install(root, source, package_hash):
+def install(root, source, package_hash, version):
     cache = store.inside(root, 'portable_config/cache/first-setup')
     if not source.is_relative_to(cache) or source == cache:
         raise ValueError('Extract the verified VS package inside the first-run staging directory')
@@ -29,7 +29,7 @@ def install(root, source, package_hash):
                     shutil.copyfile(candidate, path)
                     digest = store.digest(path)
             files.append(dict(path=name, bytes=path.stat().st_size, sha256=digest))
-        item = dict(id='vs', version='mpv-playkit-20260510-artcnn-1.6.2', sha256=package_hash)
+        item = dict(id='vs', version=version, sha256=package_hash)
         receipt = store.install_payload(root, item, {'files': files}, source)
         store.configure(root, [receipt])
 
@@ -39,8 +39,9 @@ def main():
     parser.add_argument('player', type=Path)
     parser.add_argument('source', type=Path)
     parser.add_argument('package_hash')
+    parser.add_argument('version')
     args = parser.parse_args()
-    install(args.player.resolve(), args.source.resolve(), args.package_hash)
+    install(args.player.resolve(), args.source.resolve(), args.package_hash, args.version)
 
 
 if __name__ == '__main__':

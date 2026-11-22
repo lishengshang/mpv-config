@@ -145,6 +145,13 @@ class WiringChecks(unittest.TestCase):
         self.write('input.conf', 'a script-message-to absent ready\n')
         self.assertTrue(any(f.rule == 'missing-script' and f.line == 1 for f in self.findings()))
 
+    def test_explicit_script_outside_default_directory(self):
+        self.write('mpv.conf', 'scripts-append=~~/release/menu.lua\n')
+        self.write('input.conf', 'a script-message-to menu ready\n')
+        self.assertTrue(any(f.rule == 'missing-script-file' for f in self.findings()))
+        self.write('release/menu.lua', "mp.register_script_message('ready', function() end)\n")
+        self.assertFalse(any(f.severity == 'error' for f in self.findings()))
+
     def test_disabled_script_not_available(self):
         self.write('scripts/test.lua.disable', 'mp.register_script_message("ready", function() end)\n')
         self.write('input.conf', 'a script-message-to test ready\n')

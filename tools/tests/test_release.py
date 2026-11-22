@@ -163,6 +163,40 @@ class ReleaseChecks(unittest.TestCase):
                         self.assertIn('MPV/portable_config/files/', zipped.namelist())
                         self.assertIn('MPV/portable_config/local.conf', zipped.namelist())
 
+    def test_base_snapshot_uses_native_includes_and_archives_clean_defaults(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            player = root / 'MPV'
+            config = player / 'portable_config'
+            shutil.copytree(release.ROOT / 'release/base', config / 'release/base')
+            (config / 'script-opts').mkdir()
+            registry = json.loads((config / 'release/base/extensions.json').read_text(encoding='utf-8'))
+            for item in registry:
+                script = config / item['script']
+                script.parent.mkdir(exist_ok=True)
+                script.touch()
+            release.assemble_base(player)
+            main = (config / 'mpv.conf').read_text(encoding='utf-8')
+            self.assertIn('load-scripts=no\n', main)
+            self.assertTrue(main.endswith('include=~~/state/whisper.conf\ninclude=~~/state/rtx.conf\n'
+                                          'include=~~/local.conf\n'))
+            self.assertTrue((player / 'start-mpv.cmd').is_file())
+            (config / 'local.conf').write_text('# private fixture', encoding='utf-8')
+            (config / 'state/whisper.conf').write_text('# Installed', encoding='utf-8')
+            (config / 'state/whisper.conf.previous').write_text('# private state', encoding='utf-8')
+            target = root / 'base.zip'
+            release.write_player_zip(player, target)
+            with zipfile.ZipFile(target) as zipped:
+                self.assertIsNone(zipped.testzip())
+                prefix = 'MPV/portable_config/'
+                self.assertEqual(zipped.read(prefix + 'state/whisper.conf'), b'# Disabled\n')
+                self.assertEqual(zipped.read(prefix + 'state/rtx.conf'), b'# Disabled\n')
+                self.assertNotIn(prefix + 'state/whisper.conf.previous', zipped.namelist())
+                self.assertNotIn(b'private fixture', zipped.read(prefix + 'local.conf'))
+            (player / 'components').mkdir()
+            with self.assertRaisesRegex(ValueError, 'free of optional runtimes'):
+                release.write_player_zip(player, root / 'installed.zip')
+
     def test_published_release_is_never_clobbered_or_promoted(self):
         with tempfile.TemporaryDirectory() as temp:
             assets = Path(temp)

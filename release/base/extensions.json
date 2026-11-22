@@ -1,0 +1,18 @@
+[
+  {
+    "id": "whisper",
+    "title": "AI 字幕 · Whisper",
+    "script": "scripts/sub-fastwhisper.lua",
+    "target": "sub_fastwhisper",
+    "message": "sub-fastwhisper",
+    "install": "Whisper"
+  },
+  {
+    "id": "rtx",
+    "title": "RTX 画质增强",
+    "script": "scripts/gpu-effects.lua",
+    "target": "gpu_effects",
+    "message": "menu",
+    "install": "VapourSynth"
+  }
+]

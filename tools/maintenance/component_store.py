@@ -400,6 +400,9 @@ def install_payload(root, item, manifest, payload, run_probe=True):
 
 
 def component_launcher(root, write=False):
+    base = inside(root, 'start-mpv.cmd')
+    if base.is_file():
+        return base
     path = inside(root, 'mpv-components.cmd')
     content = (b'@echo off\nsetlocal\n'
                b'set "VSSCRIPT_PATH=%~dp0VSScript.dll"\n'
@@ -420,6 +423,23 @@ def configure(root, receipts):
     root = Path(root).resolve()
     if any(item['id'] == 'vs' for item in receipts):
         component_launcher(root, write=True)
+    values = {}
+    for item in receipts:
+        directory = Path(item['root'])
+        if item['id'] == 'media':
+            values['sub_fastwhisper-ffmpeg_path'] = directory / 'ffmpeg.exe'
+        elif item['id'] == 'vs':
+            if not (root / 'start-mpv.cmd').is_file():
+                values['gpu-effects-runtime_path'] = root
+        elif item['id'] == 'whisper':
+            values['sub_fastwhisper-fast_whisper_path'] = directory / 'faster-whisper-xxl.exe'
+            values['sub_fastwhisper-whisper_model_dir'] = directory / '_models'
+        elif item['id'] == 'qwen':
+            values['sub_fastwhisper-qwen_python'] = directory / 'python/python.exe'
+            values['sub_fastwhisper-qwen_model'] = directory / 'models/Qwen3-ASR-1.7B'
+            values['sub_fastwhisper-qwen_aligner'] = directory / 'models/Qwen3-ForcedAligner-0.6B'
+    if not values:
+        return
     local = inside(root, 'portable_config/local.conf')
     text = local.read_text(encoding='utf-8-sig') if local.is_file() else ''
     registration = inside(root, 'portable_config/state/ai-runtime.json')
@@ -429,20 +449,6 @@ def configure(root, receipts):
         if record.get('schema') != 1 or not isinstance(record.get('managed_keys'), list):
             raise ValueError('Invalid unified AI registration; repair with tools/setup-ai-subtitles.ps1')
         protected = {key for key in record['managed_keys'] if isinstance(key, str) and key.startswith('sub_fastwhisper-')}
-    values = {}
-    for item in receipts:
-        directory = Path(item['root'])
-        if item['id'] == 'media':
-            values['sub_fastwhisper-ffmpeg_path'] = directory / 'ffmpeg.exe'
-        elif item['id'] == 'vs':
-            values['gpu-effects-runtime_path'] = root
-        elif item['id'] == 'whisper':
-            values['sub_fastwhisper-fast_whisper_path'] = directory / 'faster-whisper-xxl.exe'
-            values['sub_fastwhisper-whisper_model_dir'] = directory / '_models'
-        elif item['id'] == 'qwen':
-            values['sub_fastwhisper-qwen_python'] = directory / 'python/python.exe'
-            values['sub_fastwhisper-qwen_model'] = directory / 'models/Qwen3-ASR-1.7B'
-            values['sub_fastwhisper-qwen_aligner'] = directory / 'models/Qwen3-ForcedAligner-0.6B'
     for key, value in values.items():
         if key in protected:
             continue

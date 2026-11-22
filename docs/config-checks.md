@@ -108,9 +108,9 @@ Windows 构建参考 mpv 自身 MSYS2 CI，采用仍提供 mujs/rubberband 的 U
 
 同一 tag 还应用清单 `mpv_local_patches` 中的本项目退出顺序补丁：先释放音频设备通知，再销毁视频窗口；命令状态仍保留至视频事件通知结束。原因是云端完整菜单测试访问设备列表后，窗口线程结束时音频模块已卸载，随后 `wasapi_change_uninit` 注销通知触发访问冲突；基础 CPU 检查未覆盖这个生命周期。本补丁单独列出，不冒充上游提交。手动运行 `Diagnose unverified player`，指定失败发行运行 ID，可对保留的播放器取得 GDB/COM 清理调用栈；诊断任务不发布资产。
 
-流水线先跑离线回归，再构建与收集原生 DLL 依赖，随后执行配置原生解析和全脚本 CPU 播放检查：实际加载两个本地媒体、切换下一文件、恢复速度。使用精简 PATH、移除 Lua/Python/mpv 环境覆盖，从无关工作目录启动；缺能力、进程非零、日志缺失、错误级日志或缺成功标记均失败。检查后的文件摘要必须与归档前一致；最终 ZIP 再解压到含中文和空格的新位置复测，校验匹配才可发布。它不覆盖 D3D11 渲染、GPU 产帧、AI 推理或真实片源性能。
+流水线先跑离线回归，再构建并收集原生 DLL，最后组装 Base、执行配置原生解析和 CPU 播放检查，加载两个本地媒体并检查切换后倍速重置。测试使用精简 PATH，从无关工作目录启动；缺能力、进程非零、日志缺失、错误级日志或缺成功标记均失败。归档前核对文件摘要，随后把最终 ZIP 解压到含中文和空格的新位置复测。
 
-从 r2 起额外检查 `secondary-sub-scale`，并对组装后的播放器执行全菜单回归：`tools/tests/test_menu_ui.py --full --software-renderer --local-media`。CI 用本地 H.264/AAC 合成片段、D3D11 WARP 软件渲染和无增强 shader 的测试条件，提供菜单、次字幕字号、切片/重置及截图证据；不改变发行包默认画质。通过报告绑定播放器 SHA256，缺少或不匹配的 `menu-report.json` 不得发布。断言通过但进程退出异常仍失败；保留崩溃事件及 `unverified-player` 供诊断，不将其发布为候选。WARP 不替代 NVIDIA 实际渲染、VS 产帧和 AI 验收。r1 曾只通过 CPU 检查，缺少次字幕字号支持，已在该预发布说明中标为已知问题，不得晋级正式版。
+r2 至 r4 对发行包执行全菜单回归。Base 的发行门槛改为 `tools/tests/test_menu_ui.py --base --software-renderer --local-media`，检查基础脚本名单、菜单、未启用时的扩展入口、切片和重置。进阶源码仍可用 `--full` 跑全菜单检查。CI 用本地 H.264/AAC 和 D3D11 WARP，报告校验播放器 SHA256 和 Base 布局。GPU 产帧、AI 推理、真实片源性能和干净机器部署分别验收。
 
 2026-10-16 的 r2 发行基线：云端流水线（含 WARP 105 项、正常退出及 ZIP 迁移）通过；公开 ZIP 校验后，本机 RTX 4070 Laptop 的 105 项菜单/双字幕/切片回归通过，退出码 0、错误日志为空。证据为 Release 附件及本机 `cache/release-audit/r2-published-rtx.json`；不包含 VS、ASR 或真实片源性能验收。
 
@@ -125,7 +125,7 @@ python tools/tests/test_release.py
 
 公开候选包含播放器与配置。带 `first-setup.cmd` 的候选可联网安装组件。离线清单与本机快照的用法见下方组件章节。
 
-转正式版前，使用最终下载的候选包和选定组件完成启动/媒体/菜单/切片/重置、每个提供的 VS 预设产帧及 shader 渲染、Whisper/Qwen 真实字幕/缓存/取消、路径迁移和干净机器验收。把硬件、版本、组件和未覆盖项记入 Release 说明，保留原始证据；之后在 GitHub 编辑该预发布，取消 Pre-release 并设置 Latest。流程不自动做此晋级。
+转正式版前，使用最终下载的候选包验证基础播放、扩展迁移、Whisper 字幕/缓存/取消及提供的 RTX 预设输出，并在另一台干净机器部署一次。把硬件、版本、组件和未覆盖项记入 Release 说明，保留原始证据；之后在 GitHub 编辑该预发布，取消 Pre-release 并设置 Latest。
 
 2026-10-16 来源核对：官方 `v0.41.0` Windows MinGW 包可以通过本项目原生命令解析，但 `--vf=help` 没有 `vapoursynth`，不能作为当前全功能版的直接替换；外层 ZIP 还含一个内层 ZIP。构建结果以对应 Actions 运行及 Release 附件为准；本地脚本或离线回归通过不等于正式源码构建已通过。
 
@@ -133,11 +133,41 @@ python tools/tests/test_release.py
 
 ## 组件安装与迁移
 
-从 Release 下载 Windows x64 ZIP，解压后双击根目录的 `first-setup.cmd`。选择 Whisper CPU 可以在无 NVIDIA 显卡的 Windows x64 机器上启用 AI 字幕。Whisper CUDA、VapourSynth RTX、Qwen 和 SenseVoice 需要兼容的 NVIDIA 显卡及驱动。安装完成后拖入一段有清楚人声的视频，按 `Alt+F` 生成默认 Whisper 字幕。Qwen 和 SenseVoice 在 AI 字幕菜单选择，VapourSynth 使用 `mpv-components.cmd` 启动后再试 RIFE 或 Bilateral。
+### Base 入口
+
+双击 `start-mpv.cmd` 播放。右键 →「扩展」可以安装、启用或关闭 Whisper 和 RTX，也可双击同级 `first-setup.cmd`。长时间下载可用后一个入口。操作完成后重开播放器生效。Whisper CPU 可在无 NVIDIA 显卡的机器上使用，Whisper CUDA 和 RTX 预设需要相应显卡及驱动。重开后按 `Alt+f` 生成字幕，或从 RTX 扩展进入画质增强菜单。
+
+「关闭」保留运行时和已经生成的文件。「恢复上次配置」回到上一次扩展启用状态和路径配置；运行时更新需要再次执行「安装或修复」。安装器先验证上游固定文件和运行时，再写入扩展配置。Whisper 运行时使用带版本的目录，更新保留上一版；VS 有共享 DLL，遇到不同版本的冲突时，解压一个新的 Base 目录再安装。已校验下载在 `portable_config/cache/first-setup/downloads/`，重试可复用。搬动整个 Base 播放器目录后，继续使用其中的 `start-mpv.cmd`。
+
+有完整原始下载时，可运行 `first-setup.cmd -Action Whisper -DownloadDirectory "D:\下载"` 或将动作换成 `VapourSynth`。目录内须有当前清单中的原始文件名，校验通过后使用。
+
+### 从旧版迁移
+
+把 Base 解压到新目录，在 `first-setup.cmd` 选「Migrate from an older player」，输入旧 `mpv.exe` 所在的文件夹。看到检测结果后，逐项确认数据、供核对的私人配置副本、Whisper 和 RTX；直接回车表示跳过该项。安装扩展时优先复用旧目录里与当前版本大小和 SHA-256 一致的下载。
+
+播放进度写入新包 `state/watch_later/`，已生成的字幕写入 `files/subtitles/`，原有 `files/` 内容按路径复制。已有目标文件优先保留；播放器使用媒体路径识别进度和缓存，片源换路径后可能需要重新生成字幕。旧 `local.conf` 如选择保留，另存到 `state/local-before-migration.conf`，从中按需手动合并个人选项。Base 暂提供 Whisper 与 RTX 迁移，Qwen 和 SenseVoice 继续使用旧播放器或进阶配置。
+
+### 目录与扩展维护
+
+| 内容 | 位置（位于 `portable_config/` 下） |
+| --- | --- |
+| 公共选项、配置组、快捷键 | 发行时由 `release/base/` 生成 `mpv.conf`、`input.conf` 和 uosc 选项，共用 `profiles.conf` |
+| 扩展目录与本机启用状态 | `release/base/extensions.json` 登记脚本和菜单入口，安装器写入 `state/<扩展>.conf` |
+| 个人覆盖与密钥 | `local.conf` 最后加载 |
+| 播放记录、字幕、截图 | `state/watch_later/`、`files/subtitles/`、`files/screenshots/` |
+| 下载和可重建缓存 | `cache/` |
+
+优先复用 mpv 的显式脚本加载、配置 include 和 uosc 的菜单消息。新增扩展时保留现有脚本和 `script-opts/` 的上游位置，在 `extensions.json` 登记脚本、实际消息和安装入口。复用 `first-setup.ps1` 的下载与本机探针，验证通过后才写托管配置。扩展独立验收安装、打开功能、切片、停用和回退。无扩展的 Base 只加载显式列出的 uosc、thumbfast 和扩展菜单脚本。
+
+配置上游仍走定期检查 PR，按原文件位置审查，重点比较本地消息接线、默认设置和扩展注册。组件版本与配置上游分开更新。改 `tools/first-setup-sources.json` 的版本或模型时，同步当前来源的大小、SHA-256、兼容条件及对应功能说明，重测受影响的扩展后随新候选包分发。
+
+### 旧发行包与离线组件
+
+r4 和进阶配置的 `first-setup.cmd` 另外提供 Qwen 和 SenseVoice，需兼容的 NVIDIA 显卡与驱动。旧发行包安装 VS 后用 `mpv-components.cmd`，AI 字幕菜单可切换已安装后端。
 
 联网入口将 Faster-Whisper-XXL、VapourSynth 和 uv 从固定的上游 GitHub 发行下载，将模型从固定修订的模型仓库下载。Whisper 运行时、模型文件、VapourSynth 两个分卷、ArtCNN 官方色度模型和 uv 的大小与 SHA-256 记录在 `tools/first-setup-sources.json`。Qwen 和 SenseVoice 按固定版本安装独立 Python、PyTorch 与 ASR 包，模型权重由原有下载器校验。公开 ZIP 只提供播放器、公共默认值和安装代码。翻译密钥可在本机另行填写。
 
-已校验的下载保留在 `portable_config/cache/first-setup/downloads`；连接失败后重开安装器即可重用完整文件。AI 的路径相对于播放器目录登记。搬动安装了 VS 的目录后，再运行一次 VapourSynth 安装选项刷新启动器路径。清理下载缓存前先退出安装器。
+旧发行包整体搬动后，若发现 VS 或脚本路径失效，可运行原安装器或离线工具的路径修复。
 
 统一 AI 目录中的模型与运行时分开保存。组件 `export` 会读取 `local.conf` 的 `sub_fastwhisper-whisper_model_dir`，将该目录放入 Whisper 包的 `_models/`，不混入运行时旁旧模型；缺模型时停止导出。未托管环境的 `status` 按已配置的 Whisper/Qwen 模型路径检查，已安装组件仍只验收包内模型。当前组件清单仅支持 VS、媒体工具、Whisper 和 Qwen 1.7B/对齐器，尚不部署 SenseVoice 或 Qwen 0.6B；统一安装入口仍见 [AI 字幕](ai-subtitles.md#统一安装与目录)。
 
