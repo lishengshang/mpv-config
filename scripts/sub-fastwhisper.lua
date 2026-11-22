@@ -24,6 +24,7 @@ local o = {
     backend = 'whisper',
     whisper_mode = 'context',
     whisper_batch_size = 4,
+    whisper_preview = true,
     qwen_python = 'python',
     qwen_model = '~~/cache/qwen-asr/models/Qwen3-ASR-1.7B',
     qwen_small_model = '~~/cache/qwen-asr/models/Qwen3-ASR-0.6B',
@@ -118,6 +119,7 @@ local output_path
 local pid = mp.get_property_native('pid')
 local temp_path = os.getenv("TEMP") or "/tmp/"
 local active_entry, active_work, subtitles_file
+local whisper_preview_file
 local generation, recognition_job = 0, nil
 local pending_jobs, pending_timers = {}, {}
 
@@ -412,6 +414,8 @@ get_current_sub = function()
     if sub then
         local file = sub['external-filename']
         if sub.external and file and not is_protocol(file) then
+            if whisper_preview_file and (normalize(file) == normalize(whisper_preview_file) or
+                normalize(file) == normalize(whisper_preview_file:gsub('%.srt$', '.ai.ass'))) then return nil end
             if file:lower():match('%.srt$') then return file end
             local root = normalize(cache_root):gsub('\\', '/'):lower():gsub('/+$', '') .. '/'
             if normalize(file):gsub('\\', '/'):lower():sub(1, #root) == root then
@@ -447,6 +451,17 @@ local function check_sub(sub_file)
         end
     end
     return false, nil
+end
+
+local function discard_whisper_preview()
+    if not whisper_preview_file then return end
+    local present, id = check_sub(whisper_preview_file)
+    whisper_preview_file = nil
+    if present then
+        local selected = mp.get_property('sid', 'no') == tostring(id)
+        mp.commandv('sub-remove', id)
+        if selected and recognition_selection then mp.commandv('set', 'sid', recognition_selection) end
+    end
 end
 
 local pending_subtitle_loads = {}
@@ -550,9 +565,10 @@ local function finish_recognition(source)
     local selected = mp.get_property('sid', 'no')
     local selected_path = (mp.get_property_native('current-tracks/sub', {}) or {})['external-filename']
     local own_partial = selected_path and active_work and normalize(selected_path):sub(1, #normalize(active_work)) == normalize(active_work)
-    local preserve_selection = selected ~= recognition_selection and not own_partial
     local present, track = check_sub(subtitles_file)
+    local preserve_selection = not own_partial and (selected ~= recognition_selection or (whisper_preview_file and present))
     if present then mp.commandv('sub-remove', track) end
+    whisper_preview_file = nil
     subtitles_file = active_entry.srt
     append_sub(subtitles_file, preserve_selection)
     whisper_running = false
@@ -573,6 +589,7 @@ end
 
 local function reset_session()
     resetting = true
+    discard_whisper_preview()
     if translation_job then translation_job.cancel(); translation_job = nil; translation_path = nil end
     translation_cached, translation_source, previous_translation = nil, nil, nil
     translation_selection, recognition_selection, recognition_error = nil, nil, nil
@@ -903,7 +920,7 @@ local function maybe_auto_translate(source)
     end
 end
 
-local function fastwhisper_cmd(file_path, sub_path)
+local function fastwhisper_cmd(file_path, sub_path, preview_audio)
     local args = {
         fast_whisper_path,
         file_path,
@@ -915,6 +932,7 @@ local function fastwhisper_cmd(file_path, sub_path)
         "--output_dir", sub_path,
         "--output_format", "srt", "json",
     }
+    if preview_audio then table.insert(args, 2, preview_audio) end
     if whisper_model_dir ~= '' then args[#args + 1] = '--model_dir'; args[#args + 1] = whisper_model_dir end
 
     if o.language ~= "" then
@@ -976,14 +994,27 @@ local function fastwhisper()
     end
     local token, job_work = generation, active_work
     local audio_file
-    local function run_recognition()
+    local function run_recognition(preview)
+        local finished = false
+        local command = preview and fastwhisper_cmd(path, output_path, preview.audio) or args
         -- reset_session invalidates callbacks before aborting; automatic playback
         -- cancellation can fire earlier than on_unload and report a false failure.
         recognition_job = mp.command_native_async({name = 'subprocess', playback_only = false, capture_stdout = true,
-            capture_stderr = true, args = args}, function(success, res)
+            capture_stderr = true, args = command}, function(success, res)
+            finished = true
             if token ~= generation then cleanup_work(job_work); return end
             recognition_job = nil
             if audio_file then os.remove(audio_file) end
+            if preview and (not success or not res or res.status ~= 0 or not file_exists(result_file)) then
+                -- Older standalones may only accept one input file.
+                discard_whisper_preview()
+                os.remove(preview.display)
+                os.remove(result_file)
+                os.remove(result_file:gsub('%.srt$', '.json'))
+                msg.verbose('Whisper preview command failed; retrying the full file alone')
+                run_recognition()
+                return
+            end
             mp.set_osd_ass(screenx, screeny, '')
             if success and res and res.status == 0 then
                 if selected_backend ~= 'whisper' then msg.info(res.stdout or '') end
@@ -995,8 +1026,11 @@ local function fastwhisper()
                         end
                     end
                     maybe_auto_translate(subtitles_file)
+                else
+                    discard_whisper_preview()
                 end
             else
+                discard_whisper_preview()
                 recognition_error = '本地识别未完成（退出码 ' .. tostring(res and res.status or '未知') .. '），请检查后端程序和模型'
                 ui.notice('本地识别失败，已有字幕保留；可重新生成', 6)
                 msg.error('AI subtitle generation failed: ' .. tostring(res and res.stderr or 'subprocess failed'))
@@ -1004,6 +1038,26 @@ local function fastwhisper()
             whisper_running = false
             publish_status()
         end)
+        if not preview then return end
+        local function poll_preview()
+            if finished then return end
+            local data = subtitle_cache.read(preview.srt)
+            local metadata = subtitle_cache.read(preview.json)
+            if not data or not metadata or not utils.parse_json(metadata) then
+                later(0.25, poll_preview)
+                return
+            end
+            if mp.get_property('sid', 'no') ~= recognition_selection or
+                not subtitle_cache.valid_generated_srt(data, preview.duration) then return end
+            local count = shift_subtitle_timestamps(preview.srt, preview.display, 1, preview.start, preview.duration)
+            if not count or count <= 1 then return end
+            subtitles_file = preview.display
+            whisper_preview_file = subtitles_file
+            append_sub(subtitles_file)
+            ui.notice('已显示当前位置的字幕预览，正在生成整片字幕', 4)
+            msg.info('Whisper subtitle preview loaded')
+        end
+        later(0.25, poll_preview)
     end
     local selected = mp.get_property_native('current-tracks/audio', {})
     local first
@@ -1030,7 +1084,28 @@ local function fastwhisper()
             end
             run_recognition()
         end)
-    else run_recognition() end
+        return
+    end
+
+    local duration = mp.get_property_number('duration', 0)
+    if selected_backend ~= 'whisper' or not o.whisper_preview or o.whisper_mode == 'balanced' or
+        duration < 60 or duration == math.huge or duration ~= duration or not file_exists(path) then
+        run_recognition()
+        return
+    end
+    local preview_name = fname:lower():match('^mpv%-preview') and 'asr-preview' or 'mpv-preview'
+    local preview_base = utils.join_path(output_path, preview_name)
+    local preview = {audio = preview_base .. '.wav', srt = preview_base .. '.srt', json = preview_base .. '.json',
+        display = preview_base .. '-display.srt', duration = 15}
+    preview.start = math.max(0, math.min(mp.get_property_number('time-pos', 0) - 1, duration - preview.duration))
+    local audio_map = selected['ff-index'] and '0:' .. selected['ff-index'] or '0:a:0'
+    recognition_job = mp.command_native_async({name = 'subprocess', playback_only = false, capture_stderr = true,
+        args = audio_segment_args(path, preview.audio, preview.start, preview.duration, audio_map)}, function(ok, result)
+        if token ~= generation then cleanup_work(job_work); return end
+        recognition_job = nil
+        if ok and result and result.status == 0 and file_exists(preview.audio) then run_recognition(preview)
+        else run_recognition() end
+    end)
 end
 ------------------------
 
