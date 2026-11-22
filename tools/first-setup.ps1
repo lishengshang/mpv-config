@@ -1,7 +1,7 @@
 # Windows PowerShell 5.1 and later. Keep launcher and scripts in the release layout.
 [CmdletBinding()]
 param(
-    [ValidateSet('Menu','Whisper','VapourSynth','Qwen','SenseVoice','Enable','Disable','Rollback','Migrate')][string]$Action = 'Menu',
+    [ValidateSet('Menu','PlanWhisper','Whisper','VapourSynth','Qwen','SenseVoice','Enable','Disable','Rollback','Migrate')][string]$Action = 'Menu',
     [ValidateSet('cpu','cuda')][string]$Device = 'cpu',
     [ValidateSet('huggingface','modelscope')][string]$ModelSource = 'huggingface',
     [string]$DownloadDirectory = '',
@@ -17,8 +17,8 @@ if (!(Test-Path -LiteralPath (Join-Path $player 'mpv.exe') -PathType Leaf)) {
     throw 'Put portable_config next to mpv.exe before running setup.'
 }
 if ($Action -eq 'Menu') {
-    Write-Host '1  Whisper subtitles (CPU, recommended for first setup)'
-    Write-Host '2  Whisper subtitles (NVIDIA CUDA)'
+    Write-Host '1  Whisper subtitles (CPU fallback)'
+    Write-Host '2  Whisper subtitles (NVIDIA CUDA, recommended on compatible NVIDIA GPUs)'
     Write-Host '3  NVIDIA RTX (VapourSynth)'
     if ($baseLayout) {
         Write-Host '4  Change extension state'
@@ -30,8 +30,8 @@ if ($Action -eq 'Menu') {
     Write-Host '0  Exit'
     $choice = Read-Host 'Choose a component'
     switch ($choice) {
-        '1' { $Device = 'cpu' }
-        '2' { $Device = 'cuda' }
+        '1' { $Action = 'Whisper'; $Device = 'cpu' }
+        '2' { $Action = 'Whisper'; $Device = 'cuda' }
         '3' { $Action = 'VapourSynth' }
         '4' {
             if (!$baseLayout) { $Action = 'Qwen'; break }
@@ -57,7 +57,7 @@ function Assert-LocalPath([string]$Path) {
     }
 }
 
-if ($Action -notin @('Menu','Whisper','VapourSynth','Qwen','SenseVoice','Enable','Disable','Rollback','Migrate') -or
+if ($Action -notin @('Menu','PlanWhisper','Whisper','VapourSynth','Qwen','SenseVoice','Enable','Disable','Rollback','Migrate') -or
     $Feature -notin @('whisper','rtx')) { throw 'Invalid setup selection.' }
 
 $baseStateScript = Join-Path $PSScriptRoot 'base-state.ps1'
@@ -118,6 +118,63 @@ function Get-Asset($Asset, [string]$Destination) {
     Move-Item -LiteralPath $partial -Destination $Destination -Force
 }
 
+
+function Test-NvidiaDriver {
+    $smi = Join-Path $env:SystemRoot 'System32\nvidia-smi.exe'
+    if (!(Test-Path -LiteralPath $smi -PathType Leaf)) { return $false }
+    try {
+        $devices = & $smi -L 2>$null
+        return ($LASTEXITCODE -eq 0 -and [bool]($devices -match '^GPU [0-9]+:'))
+    } catch {
+        return $false
+    }
+}
+
+function Get-WhisperPlan($Whisper) {
+    $runtime = Join-Path $components $Whisper.directory
+    Assert-LocalPath $runtime
+    $installed = Test-Path -LiteralPath $runtime -PathType Container
+    $archiveBytes = [long]$Whisper.archive.unpacked_bytes
+    if ($archiveBytes -le 0) { throw 'Missing unpacked size for the pinned Whisper archive.' }
+    $runtimeBytes = $archiveBytes + [long](($Whisper.model | Measure-Object -Property bytes -Sum).Sum)
+    $downloadBytes = 0L
+    $cacheBytes = 0L
+    $newCacheBytes = 0L
+    $remaining = @()
+    foreach ($asset in (@($Whisper.archive) + @($Whisper.model))) {
+        $file = Join-Path $download $asset.name
+        $partial = "$file.part"
+        Assert-LocalPath $file
+        Assert-LocalPath $partial
+        $ready = (Test-Asset $file $asset) -or (Test-Asset $partial $asset)
+        if (!$installed -or $ready) { $cacheBytes += [long]$asset.bytes }
+        if ($installed -or $ready) { continue }
+        $partBytes = 0L
+        if (Test-Path -LiteralPath $partial -PathType Leaf) {
+            $partBytes = (Get-Item -LiteralPath $partial).Length
+            if ($partBytes -ge $asset.bytes) { $partBytes = 0L }
+        }
+        $downloadBytes += [long]$asset.bytes - $partBytes
+        # Budget for a full retry if a partial file needs to be downloaded again.
+        $newCacheBytes += [long]$asset.bytes
+        $remaining += @{name = $asset.name; bytes = [long]$asset.bytes}
+    }
+    # Staging and the final runtime are on the same volume. Reserve room for
+    # both cached assets and the extracted files, plus filesystem allocation.
+    $requiredBytes = 64MB
+    if (!$installed) { $requiredBytes += $runtimeBytes + $newCacheBytes }
+    $root = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($player))
+    $freeBytes = [IO.DriveInfo]::new($root).AvailableFreeSpace
+    return @{
+        download_bytes = $downloadBytes
+        runtime_bytes = $runtimeBytes
+        installed_bytes = $runtimeBytes + $cacheBytes
+        required_free_bytes = $requiredBytes
+        free_bytes = $freeBytes
+        drive = $root
+        assets = $remaining
+    }
+}
 
 function Remove-Stage([string]$Path) {
     $resolved = (Resolve-Path -LiteralPath $Path).Path
@@ -315,6 +372,13 @@ if ($Action -eq 'Migrate') {
     . (Join-Path $PSScriptRoot 'migrate-base.ps1')
     return
 }
+$catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'first-setup-sources.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($Action -eq 'PlanWhisper') {
+    $plan = Get-WhisperPlan $catalog.whisper
+    $plan.cuda_available = Test-NvidiaDriver
+    $plan | ConvertTo-Json -Depth 4 -Compress
+    return
+}
 foreach ($path in $cache,$download,$components) {
     Assert-LocalPath $path
     [IO.Directory]::CreateDirectory($path) | Out-Null
@@ -322,8 +386,8 @@ foreach ($path in $cache,$download,$components) {
 $lockFile = Join-Path $cache 'setup.lock'
 Assert-LocalPath $lockFile
 $lock = [IO.File]::Open($lockFile, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+$stage = $null
 try {
-    $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'first-setup-sources.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($Action -in @('Enable','Disable','Rollback')) {
         if (!$baseLayout) { throw 'This action requires a Base player package.' }
         Change-FeatureState $Feature $Action
@@ -346,14 +410,21 @@ try {
         return
     }
     $whisper = $catalog.whisper
+    $plan = Get-WhisperPlan $whisper
+    if ($plan.free_bytes -lt $plan.required_free_bytes) {
+        throw "Insufficient space on $($plan.drive). Required: $($plan.required_free_bytes) bytes; available: $($plan.free_bytes) bytes."
+    }
     $destination = Join-Path $components $whisper.directory
     Assert-LocalPath $destination
     $modelFolder = 'faster-whisper-large-v3-turbo'
-    $stage = Join-Path $cache ('whisper-' + [guid]::NewGuid().ToString('N'))
     $newInstall = !(Test-Path -LiteralPath $destination)
     if ($newInstall) {
         $archive = Join-Path $download $whisper.archive.name
         Get-Asset $whisper.archive $archive
+        foreach ($asset in $whisper.model) {
+            Get-Asset $asset (Join-Path $download $asset.name)
+        }
+        $stage = Join-Path $cache ('whisper-' + [guid]::NewGuid().ToString('N'))
         [IO.Directory]::CreateDirectory($stage) | Out-Null
         Write-Host 'Extracting Faster-Whisper-XXL ...'
         & "$env:SystemRoot\System32\tar.exe" -xf $archive -C $stage
@@ -362,7 +433,6 @@ try {
         $model = Join-Path $runtime "_models\$modelFolder"
         [IO.Directory]::CreateDirectory($model) | Out-Null
         foreach ($asset in $whisper.model) {
-            Get-Asset $asset (Join-Path $download $asset.name)
             Copy-Item -LiteralPath (Join-Path $download $asset.name) -Destination (Join-Path $model $asset.name)
         }
     } else {
@@ -401,12 +471,16 @@ try {
     }
     if ($baseLayout) {
         $settings['sub_fastwhisper-output_path'] = '~~/files/subtitles'
+        $settings['sub_fastwhisper-auto_translate'] = 'no'
         Set-FeatureConfig 'whisper' $settings
     } else {
         Update-PrivateSettings $settings
     }
-    if ($newInstall) { Remove-Stage $stage }
-    Write-Host 'Whisper installed. Open a video in mpv and press Alt+F.'
+    Write-Host 'Whisper installed. Open a video in mpv and press Alt+f.'
 } finally {
-    $lock.Dispose()
+    try {
+        if ($stage -and (Test-Path -LiteralPath $stage -PathType Container)) { Remove-Stage $stage }
+    } finally {
+        $lock.Dispose()
+    }
 }

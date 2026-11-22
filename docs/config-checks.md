@@ -134,7 +134,7 @@ python tools/tests/test_release.py
 
 ### Base 入口
 
-双击 `start-mpv.cmd` 播放。右键 →「扩展」可以安装、启用或关闭 Whisper 和 RTX，也可双击同级 `first-setup.cmd`。长时间下载可用后一个入口。操作完成后重开播放器生效。Whisper CPU 可在无 NVIDIA 显卡的机器上使用，Whisper CUDA 和 RTX 预设需要相应显卡及驱动。重开后按 `Alt+f` 生成字幕，或从 RTX 扩展进入画质增强菜单。
+双击 `start-mpv.cmd` 播放。首次按 `Alt+f` 或点「字幕 → AI 字幕…」时，安装页会显示还需下载的大小、含缓存的安装后预计占用、所需空闲空间和目标盘可用空间。检测到 NVIDIA 驱动时优先推荐 CUDA，确认后后台安装，完成后重开播放器。Whisper CUDA 和 RTX 预设需要相应显卡及驱动。右键 →「扩展」可管理 Whisper 和 RTX，同级 `first-setup.cmd` 仍提供独立安装入口。
 
 「关闭」保留运行时和已经生成的文件。「恢复上次配置」回到上一次扩展启用状态和路径配置；运行时更新需要再次执行「安装或修复」。安装器先验证上游固定文件和运行时，再写入扩展配置。Whisper 运行时使用带版本的目录，更新保留上一版；VS 有共享 DLL，遇到不同版本的冲突时，解压一个新的 Base 目录再安装。已校验下载在 `portable_config/cache/first-setup/downloads/`，重试可复用。搬动整个 Base 播放器目录后，继续使用其中的 `start-mpv.cmd`。
 
@@ -152,7 +152,7 @@ python tools/tests/test_release.py
 | --- | --- |
 | 公共选项、配置组、快捷键 | 发行时由 `release/base/` 生成 `mpv.conf`、`input.conf` 和 uosc 选项，共用 `profiles.conf` |
 | 扩展目录与本机启用状态 | `release/base/extensions.json` 登记脚本和菜单入口，安装器写入 `state/<扩展>.conf` |
-| 个人覆盖与密钥 | `local.conf` 最后加载 |
+| 个人覆盖与密钥 | `local.conf` 提供手动覆盖。字幕翻译窗口保存 Windows 当前用户加密的设置到 `state/subtitle-api.json` |
 | 播放记录、字幕、截图 | `state/watch_later/`、`files/subtitles/`、`files/screenshots/` |
 | 下载和可重建缓存 | `cache/` |
 

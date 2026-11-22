@@ -102,6 +102,10 @@ function M.new(host, refresh)
                 busy and '请先取消当前任务' or nil)
             add('language', '原声语言：' .. (view.language or '自动检测') .. '…', 'sub-fastwhisper-language-menu', not busy,
                 busy and '请先取消当前任务' or '自动检测或指定中／英／日等语种')
+            if view.api_dialog then
+                add('api', '翻译服务…', 'sub-fastwhisper-api-settings', not busy and not (report and report.state == 'budget'),
+                    view.api and '已配置' or '粘贴 API Key 并测试')
+            end
             add('auto', '自动翻译：' .. (view.auto_translate == 'foreign' and '日语等语种' or '关闭'),
                 'sub-fastwhisper-auto-translate-toggle', true, '中文、英语不自动翻译；仅影响后续任务')
             add('regenerate', '重新生成原文字幕', 'sub-fastwhisper-regenerate', view.media and not busy,
@@ -148,6 +152,9 @@ function M.new(host, refresh)
                         view.translated and 'sub-fastwhisper-load-bilingual' or 'sub-fastwhisper-translate-resume',
                         view.has_source and (view.translated or view.api), view.translated and '直接加载，不调用 API' or
                         (not view.has_source and '请先生成或选择 SRT 字幕' or (not view.api and '尚未配置翻译服务' or '使用 API')))
+                end
+                if view.api_dialog and not view.api and view.has_source then
+                    add('api', '设置翻译服务…', 'sub-fastwhisper-api-settings', true, '粘贴 API Key 并测试')
                 end
                 add('export', '导出字幕…', 'sub-fastwhisper-export-menu', view.has_source, not view.has_source and '请先生成字幕' or nil)
             end

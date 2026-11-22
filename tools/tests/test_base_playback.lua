@@ -6,6 +6,12 @@ local steps, passed, loaded = {}, 0, 0
 
 local function get(name) return mp.get_property_native(name) end
 local function kind() return get('user-data/uosc/menu/type') end
+local function plan() return get('user-data/extensions/whisper-plan') end
+local function assert_uninstalled()
+    for _, name in ipairs({'~~/cache/first-setup/downloads', '~~/../components'}) do
+        assert(not utils.file_info(mp.command_native({'expand-path', name})), 'download or install started without confirmation')
+    end
+end
 local function command(...) mp.commandv(...) end
 local function shot(name)
     local path = options.output .. '/' .. name .. '.png'
@@ -43,9 +49,20 @@ add(function()
     shot('main')
     command('script-message-to', 'uosc', 'close-menu')
     command('keypress', 'Alt+f')
-end, function() return kind() == 'extensions-whisper' end)
+end, function() return kind() == 'extensions-whisper-plan' and plan() ~= nil end)
 add(function()
+    local sizes = plan()
+    assert(sizes.download_bytes > 0 and sizes.runtime_bytes > sizes.download_bytes and
+        sizes.installed_bytes == sizes.runtime_bytes + sizes.download_bytes and
+        sizes.required_free_bytes > sizes.installed_bytes and type(sizes.cuda_available) == 'boolean',
+        'invalid first-time Whisper install plan')
+    assert_uninstalled()
     shot('subtitles')
+    command('keypress', 'ESC')
+end, function() return kind() == nil and plan() == nil end)
+add(function()
+    command('script-message-to', 'extensions', 'whisper-install', 'cpu')
+    assert_uninstalled()
     local path = mp.get_property('path')
     command('script-message-to', 'uosc', 'close-menu')
     command('set', 'speed', '1.5')

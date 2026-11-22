@@ -124,7 +124,8 @@ class ReleaseChecks(unittest.TestCase):
             runtime, output = root / 'runtime', root / 'stage'
             runtime.mkdir()
             release.dump(runtime / 'build-info.json', dict(
-                mpv_tag=plan['mpv_tag'], mpv_commit=plan['mpv_commit'], dependencies=plan['build']))
+                mpv_tag=plan['mpv_tag'], mpv_commit=plan['mpv_commit'],
+                dependencies=dict(plan['build'], revision=plan['build']['revision'] - 1)))
             launcher = b'@echo off\\n'
             def snapshot(_source, _commit, config):
                 tools = config / 'tools'
@@ -184,6 +185,7 @@ class ReleaseChecks(unittest.TestCase):
             (config / 'local.conf').write_text('# private fixture', encoding='utf-8')
             (config / 'state/whisper.conf').write_text('# Installed', encoding='utf-8')
             (config / 'state/whisper.conf.previous').write_text('# private state', encoding='utf-8')
+            (config / 'state/subtitle-api.json').write_text('{}', encoding='utf-8')
             target = root / 'base.zip'
             release.write_player_zip(player, target)
             with zipfile.ZipFile(target) as zipped:
@@ -192,6 +194,7 @@ class ReleaseChecks(unittest.TestCase):
                 self.assertEqual(zipped.read(prefix + 'state/whisper.conf'), b'# Disabled\n')
                 self.assertEqual(zipped.read(prefix + 'state/rtx.conf'), b'# Disabled\n')
                 self.assertNotIn(prefix + 'state/whisper.conf.previous', zipped.namelist())
+                self.assertNotIn(prefix + 'state/subtitle-api.json', zipped.namelist())
                 self.assertNotIn(b'private fixture', zipped.read(prefix + 'local.conf'))
             (player / 'components').mkdir()
             with self.assertRaisesRegex(ValueError, 'free of optional runtimes'):

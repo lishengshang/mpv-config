@@ -4,7 +4,7 @@
 
 ## 待验收：Base 与可选扩展
 
-- 转正式版前，使用公开候选在干净 Windows 机器复测安装和旧版迁移，补齐 Whisper CUDA 与其余 RTX 预设验收。验收入口见 [配置检查](docs/config-checks.md#正式版跟随与预发布)。
+- 待在另一台干净 Windows 机器复测 Base 安装和旧版迁移，并补齐其余 RTX 预设验收。验收入口见 [配置检查](docs/config-checks.md#正式版跟随与预发布)。
 
 ## 在途：组件发行与正式版跟随
 

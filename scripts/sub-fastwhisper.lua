@@ -155,6 +155,33 @@ local ui
 
 local is_windows = package.config:sub(1, 1) == "\\"
 
+local base_whisper = mp.get_property_native('options/script-opts', {})['extensions-whisper'] == 'yes'
+local api_helper = is_windows and mp.find_config_file and mp.find_config_file('tools/subtitle-api.ps1')
+local saved_service, configuring_service
+local function service_command(action, ...)
+    return {name = 'subprocess', playback_only = false, capture_stdout = true, capture_stderr = true,
+        args = {'powershell.exe', '-NoProfile', '-NonInteractive', '-STA', '-ExecutionPolicy', 'Bypass',
+            '-File', api_helper, '-Action', action, ...}}
+end
+
+local function read_service(result)
+    if not result or result.status ~= 0 then return end
+    local settings = utils.parse_json(result.stdout or '')
+    if type(settings) == 'table' and settings.endpoint and settings.model and settings.revision then
+        saved_service = settings
+        o.api_url, o.api_mode = settings.endpoint, settings.model
+        return true
+    end
+end
+
+local function has_service()
+    return saved_service ~= nil or (o.api_key and o.api_key:match('%S') ~= nil)
+end
+
+if is_windows and api_helper and mp.find_config_file('state/subtitle-api.json') then
+    read_service(mp.command_native(service_command('Read')))
+end
+
 local function is_protocol(path)
     return type(path) == 'string' and (path:find('^%a[%w.+-]-://') ~= nil or path:find('^%a[%w.+-]-:%?') ~= nil)
 end
@@ -356,7 +383,7 @@ local function publish_status(translation_status)
             end
             return false
         end)(),
-        api = o.api_key and o.api_key:match('%S') ~= nil})
+        api = has_service(), api_dialog = is_windows and api_helper ~= nil})
 end
 
 local function explain(message, seconds)
@@ -711,10 +738,34 @@ generate_ass = function(subtitles_file, auto, item, background)
 end
 
 -------------Translation function----------------
+local function configure_service()
+    if not is_windows or not api_helper then
+        ui.notice('请在 local.conf 中设置翻译接口', 5)
+        return
+    end
+    if configuring_service then return end
+    local report = translation_job and translation_job.snapshot()
+    if report and (report.state == 'running' or report.state == 'waiting' or
+            report.state == 'retrying' or report.state == 'budget') then
+        ui.notice('请先完成或取消当前翻译任务', 5)
+        return
+    end
+    configuring_service = true
+    mp.command_native_async(service_command('Configure', '-OwnerPid', tostring(pid)), function(ok, result)
+        configuring_service = false
+        if ok and read_service(result) then
+            ui.notice('翻译服务测试通过，已保存', 5)
+        elseif not result or result.status ~= 2 then
+            ui.notice('无法打开或保存翻译服务设置', 5)
+        end
+        publish_status()
+    end)
+end
+
 -- Call the GPT API
 local request_sequence = 0
 local function call_gpt_api(subtitles, callback, batch)
-    if not o.api_key or o.api_key:match('^%s*$') then callback({status = 401, error = '未配置 API key'}); return function() end end
+    if not has_service() then callback({status = 401, error = '未配置 API Key'}); return function() end end
     local dir = utils.join_path(cache_root, '_requests')
     if not subtitle_cache.mkdir(dir) then callback({status = 400, error = '无法创建请求目录'}); return function() end end
     request_sequence = request_sequence + 1
@@ -725,29 +776,51 @@ local function call_gpt_api(subtitles, callback, batch)
         temperature = batch.stage == 'calibration' and 0.1 or o.api_temperature,
         messages = {{role = 'system', content = prompt}, {role = 'user', content = subtitles}}})
     local function cleanup() os.remove(auth); os.remove(body); os.remove(headers) end
-    if not subtitle_cache.write(auth, 'Authorization: Bearer ' .. o.api_key .. '\nContent-Type: application/json\n') or
-        not subtitle_cache.write(body, payload) then
+    local service = saved_service
+    if not subtitle_cache.write(body, payload) or (not service and not subtitle_cache.write(auth,
+        'Authorization: Bearer ' .. o.api_key .. '\nContent-Type: application/json\n')) then
         cleanup(); callback({status = 400, error = '无法保存请求参数'}); return function() end
+    end
+    local command
+    if service then
+        command = service_command('Request', '-Revision', service.revision, '-RequestPath', body,
+            '-TimeoutSeconds', tostring(math.max(1, math.min(900, o.api_timeout))))
+    else
+        command = {name = 'subprocess', playback_only = false, capture_stdout = true, capture_stderr = true,
+            args = {'curl', '-sS', '--fail-with-body', '--connect-timeout', '10', '--max-time', tostring(o.api_timeout),
+                '--header', '@' .. auth, '--data-binary', '@' .. body, '--dump-header', headers,
+                '--write-out', '\nMPV_HTTP_STATUS:%{http_code}', o.api_url}}
     end
     msg.info('AI subtitle ' .. (batch.stage == 'calibration' and 'calibration' or 'translation') .. ' in progress')
     local signal, token = nil, generation
-    signal = mp.command_native_async({name = 'subprocess', playback_only = false, capture_stdout = true, capture_stderr = true,
-        args = {'curl', '-sS', '--fail-with-body', '--connect-timeout', '10', '--max-time', tostring(o.api_timeout),
-            '--header', '@' .. auth, '--data-binary', '@' .. body, '--dump-header', headers,
-            '--write-out', '\nMPV_HTTP_STATUS:%{http_code}', o.api_url}}, function(ok, result)
+    signal = mp.command_native_async(command, function(ok, result)
         pending_jobs[signal] = nil
-        local response_headers = subtitle_cache.read(headers) or ''
+        local response_headers = not service and subtitle_cache.read(headers) or ''
         cleanup()
         if token ~= generation then return end
         result = result or {}
         local output = result.stdout or ''
-        local status = tonumber(output:match('\nMPV_HTTP_STATUS:(%d+)%s*$')) or (ok and result.status == 0 and 200 or 0)
-        output = output:gsub('\nMPV_HTTP_STATUS:%d+%s*$', '')
+        local status, retry
+        if service then
+            if result.status == 3 or result.status == 4 then
+                callback({status = result.status == 3 and 401 or 0,
+                    error = result.status == 3 and '保存的接口设置已变更，请重新配置' or '字幕服务请求未完成'})
+                return
+            end
+            local response = utils.parse_json(output)
+            status = type(response) == 'table' and tonumber(response.status) or 0
+            retry = type(response) == 'table' and response.retry_after
+            output = type(response) == 'table' and response.body or ''
+        else
+            status = tonumber(output:match('\nMPV_HTTP_STATUS:(%d+)%s*$')) or (ok and result.status == 0 and 200 or 0)
+            output = output:gsub('\nMPV_HTTP_STATUS:%d+%s*$', '')
+            retry = response_headers:match('[Rr]etry%-[Aa]fter:%s*([^\r\n]+)')
+        end
         local data = utils.parse_json(output)
         local choice = type(data) == 'table' and type(data.choices) == 'table' and data.choices[1]
         local text = type(choice) == 'table' and type(choice.message) == 'table' and choice.message.content
         local usage = type(data) == 'table' and type(data.usage) == 'table' and data.usage.total_tokens
-        local retry_after = translation_queue.retry_after(response_headers:match('[Rr]etry%-[Aa]fter:%s*([^\r\n]+)'))
+        local retry_after = translation_queue.retry_after(retry)
         local finish_reason = type(choice) == 'table' and choice.finish_reason
         if finish_reason == 'length' then text = nil end
         callback({status = status, text = type(text) == 'string' and text or nil,
@@ -853,9 +926,8 @@ end
 
 -- Translate .srt file
 local function translate_srt_file(subtitles_file, keep_selection)
-    if not o.api_key or o.api_key:match('^%s*$') then
-        ui.notice('尚未配置翻译服务，请先完成接口设置', 5); publish_status(); return
-    end
+    if configuring_service then return end
+    if not has_service() then configure_service(); return end
     if not subtitles_file then
         subtitles_file = get_current_sub()
     end
@@ -903,7 +975,7 @@ end
 --------------------------------------------------
 
 local function maybe_auto_translate(source)
-    if o.auto_translate ~= 'foreign' or not o.api_key or o.api_key:match('^%s*$') then return end
+    if configuring_service or o.auto_translate ~= 'foreign' or not has_service() then return end
     local metadata = utils.parse_json(subtitle_cache.read(utils.join_path(utils.split_path(source), 'language.json')) or '')
     local languages = metadata and metadata.payload == subtitle_cache.digest(subtitle_cache.read(source) or '') and metadata.languages or {}
     if #languages == 0 and o.language ~= '' then languages = {o.language} end
@@ -1553,6 +1625,7 @@ mp.add_hook('on_unload', 50, reset_session)
 mp.register_event('file-loaded', function() load_cached(current_entry(), true); publish_status() end)
 
 mp.register_script_message("sub-translate", translate_srt_file)
+mp.register_script_message('sub-fastwhisper-api-settings', configure_service)
 mp.register_script_message("sub-fastwhisper", function() whisper(false) end)
 mp.register_script_message('sub-fastwhisper-regenerate', function() whisper(true) end)
 local function open_page(page)
@@ -1595,6 +1668,7 @@ mp.register_script_message('sub-fastwhisper-cancel', function()
     publish_status()
 end)
 mp.register_script_message('sub-fastwhisper-translate-resume', function()
+    if configuring_service then return end
     local source = current_artifacts().original
     local same_source = source and translation_source and subtitle_cache.read(source) == subtitle_cache.read(translation_source)
     if translation_job and same_source then translation_job.resume()
@@ -1637,7 +1711,8 @@ mp.register_script_message('sub-fastwhisper-existing', function()
         title='使用已有字幕', keep_open=true, items={
             {title='选择内封／已加载字幕…', value={'script-binding', 'uosc/subtitles'}},
             {title='加载本地字幕文件…', value={'script-binding', 'uosc/load-subtitles'}},
-            {title='搜索下载字幕…', hint='需要字幕下载服务配置', value={'script-message-to', 'sub_assrt', 'sub-assrt'}},
+            {title='搜索下载字幕…', value=base_whisper and {'script-binding', 'uosc/download-subtitles'} or
+                {'script-message-to', 'sub_assrt', 'sub-assrt'}},
         }, footnote='影视优先使用匹配版本的现成字幕；缺失时可返回 AI 字幕生成。'}))
 end)
 mp.register_script_message('sub-fastwhisper-backend-menu', function()

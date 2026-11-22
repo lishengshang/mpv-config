@@ -305,7 +305,9 @@ def package_release(args):
     for key in ('mpv_tag', 'mpv_commit'):
         if provenance[key] != plan[key]:
             raise ValueError('Runtime source differs from planned official tag')
-    if provenance['dependencies'] != plan['build']:
+    # A configuration-only revision can reuse the same tagged Windows build.
+    native_dependencies = dict(provenance['dependencies'], revision=plan['build']['revision'])
+    if native_dependencies != plan['build']:
         raise ValueError('Runtime dependency pins differ from the release plan')
     if not re.search(r'\bmpv v?' + re.escape(plan['mpv_tag'][1:]) + r'(?:\s|[-+])', version):
         raise ValueError('Runtime version differs from planned official release')
