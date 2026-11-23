@@ -176,10 +176,13 @@ function Get-WhisperPlan($Whisper) {
     }
 }
 
-function Remove-Stage([string]$Path) {
+function Remove-Stage([string]$Path, [switch]$WhisperStage) {
     $resolved = (Resolve-Path -LiteralPath $Path).Path
     Assert-LocalPath $resolved
-    if (!(Split-Path $resolved -Parent).Equals($cache, [StringComparison]::OrdinalIgnoreCase) -or
+    $parent = $cache
+    if ($WhisperStage) { $parent = $player }
+    if (!(Split-Path $resolved -Parent).Equals($parent, [StringComparison]::OrdinalIgnoreCase) -or
+        ($WhisperStage -and [IO.Path]::GetFileName($resolved) -cnotmatch '^\.w-[0-9a-f]{18}$') -or
         (Get-ChildItem -LiteralPath $resolved -Recurse -Force -Attributes ReparsePoint | Select-Object -First 1)) {
         throw 'Unexpected staging cleanup location.'
     }
@@ -424,8 +427,12 @@ try {
         foreach ($asset in $whisper.model) {
             Get-Asset $asset (Join-Path $download $asset.name)
         }
-        $stage = Join-Path $cache ('whisper-' + [guid]::NewGuid().ToString('N'))
-        [IO.Directory]::CreateDirectory($stage) | Out-Null
+        # Keep the native probe's path as short as the installed runtime path.
+        $stagePath = Join-Path $player ('.w-' + [guid]::NewGuid().ToString('N').Substring(0, 18))
+        Assert-LocalPath $stagePath
+        if (Test-Path -LiteralPath $stagePath) { throw 'Whisper staging path already exists.' }
+        [IO.Directory]::CreateDirectory($stagePath) | Out-Null
+        $stage = $stagePath
         Write-Host 'Extracting Faster-Whisper-XXL ...'
         & "$env:SystemRoot\System32\tar.exe" -xf $archive -C $stage
         if ($LASTEXITCODE) { throw 'Could not extract Faster-Whisper-XXL.' }
@@ -479,7 +486,7 @@ try {
     Write-Host 'Whisper installed. Open a video in mpv and press Alt+f.'
 } finally {
     try {
-        if ($stage -and (Test-Path -LiteralPath $stage -PathType Container)) { Remove-Stage $stage }
+        if ($stage -and (Test-Path -LiteralPath $stage -PathType Container)) { Remove-Stage $stage -WhisperStage }
     } finally {
         $lock.Dispose()
     }

@@ -393,6 +393,109 @@ class BaseMigrationChecks(unittest.TestCase):
                     self.assertEqual(selections, [f'setup-selection=Whisper/{expected}'])
 
 
+@unittest.skipUnless(os.name == 'nt' and shutil.which('powershell.exe'), 'Windows PowerShell is required')
+class WhisperStagingChecks(unittest.TestCase):
+    def test_failed_probe_releases_lock_and_retry_uses_short_stage_and_cached_downloads(self):
+        powershell = ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File']
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            # Keep the fixture files below MAX_PATH even in the older, deeper stage.
+            player_prefix = root / 'player-'
+            player = player_prefix.with_name(player_prefix.name + 'x' * max(1, 105 - len(str(player_prefix))))
+            config = player / 'portable_config'
+            tools = config / 'tools'
+            tools.mkdir(parents=True)
+            for name in ('mpv.exe', 'start-mpv.cmd'):
+                (player / name).touch()
+            shutil.copytree(release.ROOT / 'release/base', config / 'release/base')
+            for name in ('first-setup.ps1', 'base-state.ps1'):
+                shutil.copy2(release.ROOT / 'tools' / name, tools / name)
+            state = config / 'state/whisper.conf'
+            state.parent.mkdir()
+            state.write_bytes(b'# Disabled\n')
+
+            source = root / 'probe.cs'
+            source.write_text(
+                'using System;\n'
+                'using System.IO;\n'
+                'public static class Probe {\n'
+                '    public static int Main() {\n'
+                '        string directory = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);\n'
+                '        string log = Environment.GetEnvironmentVariable("TEST_WHISPER_PROBE_LOG");\n'
+                '        File.AppendAllText(log, directory.Length.ToString() + Environment.NewLine);\n'
+                '        return Environment.GetEnvironmentVariable("TEST_WHISPER_PROBE_FAIL") == "yes" ? 19 : 0;\n'
+                '    }\n'
+                '}\n',
+                encoding='utf-8', newline='\n',
+            )
+            compiler = root / 'compile.ps1'
+            compiler.write_text(
+                '$ErrorActionPreference = "Stop"\n'
+                'Add-Type -Path (Join-Path $PSScriptRoot "probe.cs") -OutputType ConsoleApplication '
+                '-OutputAssembly (Join-Path $PSScriptRoot "probe.exe")\n',
+                encoding='utf-8', newline='\n',
+            )
+            release.run(powershell + [compiler])
+            offline = root / 'offline'
+            offline.mkdir()
+            empty = root / 'empty'
+            empty.mkdir()
+            archive = offline / 'whisper.zip'
+            probe = root / 'probe.exe'
+            with zipfile.ZipFile(archive, 'w') as payload:
+                for name in ('faster-whisper-xxl.exe', 'ffmpeg.exe'):
+                    payload.write(probe, f'Faster-Whisper-XXL/{name}')
+            model = offline / 'model.bin'
+            model.write_bytes(b'model fixture')
+            assets = [dict(name=file.name, bytes=file.stat().st_size, sha256=release.hash_file(file))
+                      for file in (archive, model)]
+            assets[0]['unpacked_bytes'] = 2 * probe.stat().st_size
+            catalog = json.loads((release.ROOT / 'tools/first-setup-sources.json').read_text(encoding='utf-8'))
+            directory = catalog['whisper']['directory']
+            release.dump(tools / 'first-setup-sources.json', dict(whisper=dict(
+                directory=directory, archive=assets[0], model=assets[1:])))
+            destination = player / 'components' / directory
+            cache = config / 'cache/first-setup'
+
+            driver = root / 'install.ps1'
+            driver.write_text(
+                'param($Installer, $Offline, $Empty, $State, $Destination, $Lock)\n'
+                '$ErrorActionPreference = "Stop"\n'
+                '$oldState = [IO.File]::ReadAllText($State)\n'
+                '$env:TEST_WHISPER_PROBE_LOG = Join-Path $PSScriptRoot "probes.log"\n'
+                '$env:TEST_WHISPER_PROBE_FAIL = "yes"\n'
+                'try {\n'
+                '    & $Installer -Action Whisper -DownloadDirectory $Offline\n'
+                '    throw "Expected the runtime probe to fail."\n'
+                '} catch {\n'
+                '    if ($_.Exception.Message -ne "Whisper runtime check failed.") { throw }\n'
+                '}\n'
+                'if ([IO.File]::ReadAllText($State) -cne $oldState -or (Test-Path -LiteralPath $Destination)) {\n'
+                '    throw "Failed probe changed the installation."\n'
+                '}\n'
+                '$lockHandle = [IO.File]::Open($Lock, "Open", "ReadWrite", "None")\n'
+                '$lockHandle.Dispose()\n'
+                '$env:TEST_WHISPER_PROBE_FAIL = "no"\n'
+                '& $Installer -Action Whisper -DownloadDirectory $Empty\n',
+                encoding='utf-8', newline='\n',
+            )
+            result = subprocess.run(
+                [*powershell, driver, tools / 'first-setup.ps1', offline, empty, state, destination, cache / 'setup.lock'],
+                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=60,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue((destination / 'faster-whisper-xxl.exe').is_file())
+            self.assertIn('script-opts-append=extensions-whisper=yes', state.read_text(encoding='utf-8'))
+            self.assertEqual(list(player.glob('.w-*')), [])
+            self.assertEqual(list(cache.glob('whisper-*')), [])
+            for asset in assets:
+                self.assertEqual(release.hash_file(cache / 'downloads' / asset['name']), asset['sha256'])
+            lengths = [int(line) for line in (root / 'probes.log').read_text(encoding='utf-8').splitlines()]
+            self.assertEqual(len(lengths), 3)
+            destination_length = len(str(destination).encode('utf-16-le')) // 2
+            self.assertLessEqual(max(lengths), destination_length, lengths)
+
+
 @unittest.skipUnless(os.environ.get('MPV_RELEASE_NATIVE_ROOT'), 'Set MPV_RELEASE_NATIVE_ROOT for a local CPU/script smoke test')
 class NativeReleaseChecks(unittest.TestCase):
     def test_local_runtime_and_relocated_archive(self):
