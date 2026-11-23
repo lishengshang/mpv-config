@@ -17,6 +17,28 @@ function Confirm-Migration([string]$Prompt) {
     return (Read-Host "$Prompt [y/N]") -ieq 'y'
 }
 
+function Get-MigratedWhisperDevice([string]$OldConfig) {
+    $device = 'cpu'
+    $deviceSetting = '^\s*(?:--)?script-opts-append\s*=\s*' +
+        '(?:(?<quote>["''])sub_fastwhisper-device=(?<device>[^"'']*)\k<quote>|sub_fastwhisper-device=(?<device>[^#]*))\s*(?:#.*)?$'
+    # Base includes its saved extension settings before personal overrides.
+    foreach ($relative in 'state\whisper.conf', 'local.conf') {
+        $path = Join-Path $OldConfig $relative
+        Assert-LocalPath $path
+        if (!(Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        $globalOptions = $true
+        foreach ($line in Get-Content -LiteralPath $path -Encoding UTF8) {
+            if ($line -cmatch '^\s*\[([^\]]+)\]') {
+                $globalOptions = $Matches[1] -ceq 'default'
+            } elseif ($globalOptions -and $line -cmatch $deviceSetting) {
+                $device = $Matches.device.TrimEnd()
+            }
+        }
+    }
+    if ($device -ieq 'cuda') { return 'cuda' }
+    return 'cpu'
+}
+
 function Copy-UserFiles([string]$Source, [string]$Target, [switch]$Subtitles) {
     if (!(Test-Path -LiteralPath $Source -PathType Container)) { return }
     Assert-LocalPath $Source
@@ -75,14 +97,8 @@ if ($copyLocal) {
     Write-Host 'Private settings saved for review in state\local-before-migration.conf.'
 }
 if ($keepWhisper) {
-    $previousDevice = 'cpu'
-    if ($foundLocal) {
-        Assert-LocalPath $oldLocal
-        if (Select-String -LiteralPath $oldLocal -Pattern '^\s*script-opts-append\s*=\s*sub_fastwhisper-device=cuda\s*$' -Quiet) {
-            $previousDevice = 'cuda'
-        }
-    }
-    & (Join-Path $PSScriptRoot 'first-setup.ps1') -Action Whisper -Device $previousDevice -From $old
+    $device = Get-MigratedWhisperDevice $oldConfig
+    & (Join-Path $PSScriptRoot 'first-setup.ps1') -Action Whisper -Device $device -From $old
 }
 if ($keepRtx) {
     & (Join-Path $PSScriptRoot 'first-setup.ps1') -Action VapourSynth -From $old

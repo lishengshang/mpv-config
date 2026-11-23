@@ -316,6 +316,83 @@ class ReleaseChecks(unittest.TestCase):
             self.assertTrue(report['errors'])
 
 
+@unittest.skipUnless(os.name == 'nt' and shutil.which('powershell.exe'), 'Windows PowerShell is required')
+class BaseMigrationChecks(unittest.TestCase):
+    def test_whisper_migration_preserves_the_previous_device(self):
+        cuda = 'script-opts-append=sub_fastwhisper-device=cuda\n'
+        cpu = 'script-opts-append=sub_fastwhisper-device=cpu\n'
+        enabled = '# Installed\nscript-opts-append=extensions-whisper=yes\nscripts-append=~~/scripts/sub-fastwhisper.lua\n'
+        cases = (
+            ('base-cuda', enabled + cuda, None, 'cuda'),
+            ('local-cpu-overrides-state', enabled + cuda, cpu, 'cpu'),
+            ('local-cuda-overrides-state', enabled + cpu, cuda, 'cuda'),
+            ('quoted-personal-override', enabled + cuda,
+             'script-opts-append="sub_fastwhisper-device=cpu" # personal preference\n', 'cpu'),
+            ('single-quoted-personal-override', enabled + cpu,
+             "script-opts-append='sub_fastwhisper-device=cuda'\n", 'cuda'),
+            ('prefixed-personal-override', enabled + cpu, '--' + cuda, 'cuda'),
+            ('legacy-cuda', None, cuda, 'cuda'),
+            ('installed-but-disabled', '# Installed\n' + cuda, None, 'cuda'),
+            ('unconfigured', '# Disabled\n', None, 'cpu'),
+            ('legacy-last-device', None, cuda + cpu, 'cpu'),
+            ('unsupported-local-device', enabled + cuda, cpu.replace('cpu', 'auto'), 'cpu'),
+            ('named-profile-is-not-global', enabled + cuda, '[named-profile]\n' + cpu, 'cuda'),
+            ('default-profile-restores-global-options', enabled + cuda, '[named-profile]\n' + cuda + '[default]\n' + cpu, 'cpu'),
+        )
+        production_tools = release.ROOT / 'tools'
+        sources = json.loads((production_tools / 'first-setup-sources.json').read_text(encoding='utf-8'))
+        directory = sources['whisper']['directory']
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            player = root / 'new player'
+            config = player / 'portable_config'
+            tools = config / 'tools'
+            tools.mkdir(parents=True)
+            for name in ('mpv.exe', 'start-mpv.cmd'):
+                (player / name).touch()
+            shutil.copytree(release.ROOT / 'release/base', config / 'release/base')
+            for name in ('migrate-base.ps1', 'base-state.ps1', 'first-setup-sources.json'):
+                shutil.copy2(production_tools / name, tools / name)
+            shutil.copy2(production_tools / 'first-setup.ps1', tools / 'migration-entry.ps1')
+            (tools / 'first-setup.ps1').write_text(
+                'param($Action, $Device, $From)\n'
+                'Write-Output "setup-selection=$Action/$Device"\n',
+                encoding='utf-8', newline='\n',
+            )
+            driver = tools / 'run-migration.ps1'
+            driver.write_text(
+                'param([string]$OldPlayer)\n'
+                '$ErrorActionPreference = "Stop"\n'
+                'function Read-Host([string]$Prompt) {\n'
+                '    if ($Prompt -like "Restore and enable Whisper*") { return "y" }\n'
+                '    return "n"\n'
+                '}\n'
+                '& (Join-Path $PSScriptRoot "migration-entry.ps1") -Action Migrate -From $OldPlayer\n',
+                encoding='utf-8', newline='\n',
+            )
+            for name, state, local, expected in cases:
+                with self.subTest(name=name):
+                    old_player = root / name
+                    old_config = old_player / 'portable_config'
+                    (old_config / 'state').mkdir(parents=True)
+                    (old_player / 'mpv.exe').touch()
+                    runtime = old_player / 'components' / directory
+                    runtime.mkdir(parents=True)
+                    (runtime / 'faster-whisper-xxl.exe').touch()
+                    if state is not None:
+                        (old_config / 'state/whisper.conf').write_text(state, encoding='utf-8', newline='\n')
+                    if local is not None:
+                        (old_config / 'local.conf').write_text(local, encoding='utf-8', newline='\n')
+                    result = subprocess.run(
+                        ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+                         '-File', str(driver), str(old_player)],
+                        capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    selections = [line for line in result.stdout.splitlines() if line.startswith('setup-selection=')]
+                    self.assertEqual(selections, [f'setup-selection=Whisper/{expected}'])
+
+
 @unittest.skipUnless(os.environ.get('MPV_RELEASE_NATIVE_ROOT'), 'Set MPV_RELEASE_NATIVE_ROOT for a local CPU/script smoke test')
 class NativeReleaseChecks(unittest.TestCase):
     def test_local_runtime_and_relocated_archive(self):
